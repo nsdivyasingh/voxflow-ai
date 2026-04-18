@@ -1,6 +1,9 @@
 import https from 'https';
+import dotenv from 'dotenv';
 
-const API_KEY = 'AIzaSyBwHHwrlfZApLIf1KuEiSHKIyJlgMGc2o8';
+dotenv.config();
+
+const API_KEY = process.env.GEMINI_API_KEY;
 const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
 
 https.get(url, (res) => {
