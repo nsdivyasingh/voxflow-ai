@@ -268,7 +268,87 @@ debugToggle.addEventListener('click', () => {
   conversation.setDebugMode(isActive);
 });
 
+// Clear Memory button
+const clearMemoryBtn = document.getElementById('clearMemoryBtn');
+clearMemoryBtn.addEventListener('click', async () => {
+  const confirmed = confirm('Clear all conversation memory? This cannot be undone.');
+  if (!confirmed) return;
+
+  clearMemoryBtn.disabled = true;
+  clearMemoryBtn.classList.add('clearing');
+  const btnText = clearMemoryBtn.querySelector('span');
+  const originalText = btnText.textContent;
+  btnText.textContent = 'Clearing...';
+
+  const success = await conversation.clearMemory();
+
+  btnText.textContent = success ? 'Cleared!' : 'Failed';
+  setTimeout(() => {
+    btnText.textContent = originalText;
+    clearMemoryBtn.disabled = false;
+    clearMemoryBtn.classList.remove('clearing');
+  }, 2000);
+});
+
+// ── Reminder Notifications ──
+
+/**
+ * Connect to the server's SSE stream for real-time reminder alerts.
+ * When a reminder fires, show a browser notification + in-chat message.
+ */
+function initReminderListener() {
+  // Request notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(perm => {
+      console.log('[VoxFlow] Notification permission:', perm);
+    });
+  }
+
+  // Connect to SSE stream
+  const evtSource = new EventSource('/api/reminders/events');
+
+  evtSource.addEventListener('reminder', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      console.log('[VoxFlow] 🔔 Reminder fired:', data);
+
+      // Show browser notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const notif = new Notification('🔔 VoxFlow Reminder', {
+          body: data.what,
+          icon: '/logo.jpeg',
+          tag: data.id,
+          requireInteraction: true,
+        });
+        notif.onclick = () => {
+          window.focus();
+          notif.close();
+        };
+      }
+
+      // Show in-chat notification
+      conversation._renderMessage('assistant', `🔔 **Reminder:** ${data.what}`, {
+        toolUsed: 'api',
+        queryType: 'ACTION',
+        sources: ['Reminder System'],
+      });
+
+      // Speak the reminder aloud
+      if (tts) {
+        tts.speak(`Reminder: ${data.what}`);
+      }
+    } catch (err) {
+      console.error('[VoxFlow] Reminder parse error:', err);
+    }
+  });
+
+  evtSource.onerror = () => {
+    console.warn('[VoxFlow] Reminder SSE connection lost, will reconnect...');
+  };
+}
+
 // ── Initialization ──
 setStatus('ready', 'Ready');
 initVoice();
+initReminderListener();
 console.log('[VoxFlow] Application initialized.');

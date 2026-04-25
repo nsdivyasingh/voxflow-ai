@@ -16,7 +16,8 @@ def call_ollama(prompt):
                     {"role": "user", "content": prompt}
                 ],
                 "stream": False   # IMPORTANT FIX
-            }
+            },
+            timeout=3  # Fail fast if Ollama is not running
         )
 
         data = response.json()

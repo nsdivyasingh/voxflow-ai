@@ -9,134 +9,116 @@
  *   GET  /api/health         → Health check
  */
 
-import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-dotenv.config({ path: "./.env" });
-
-console.log("✅ Loaded API KEY:", process.env.GEMINI_API_KEY);
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 import express from 'express';
 import cors from 'cors';
+import { orchestrate } from './orchestrator.js';
+import { initLLM, isLLMAvailable } from './responseGenerator.js';
 import { initQdrant, isQdrantReady, getRetrievalHealth } from './retriever.js';
+import { initMemory, isMemoryReady, getMemoryHealth, clearMemory } from './memoryLayer.js';
 import {
   getSession,
   confirmPendingAction,
   cancelPendingAction,
 } from './sessionStore.js';
 import { executeConfirmedAction } from './actionExecutor.js';
+import { onReminderFired, getReminders } from './reminderStore.js';
 
 const app = express();
-const PORT = 3002;
+const PORT = 3001;
 
 app.use(cors());
 app.use(express.json());
 
 // ── Load .env if available ──
+try {
+  const dotenv = await import('dotenv');
+  const configFn = dotenv.config || dotenv.default?.config;
+  if (configFn) {
+    configFn({ path: new URL('../.env', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1') });
+  }
+} catch {
+  // dotenv not installed — no problem, continue without it
+}
 
 // ── Initialize services on startup ──
-
+await initLLM();
 await initQdrant();
+await initMemory();
 
-async function getGeminiResponse(userText) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-  const prompt = `
-You are an AI assistant.
-
-If the user asks to perform an action, respond ONLY in JSON format like this:
-
-[
-  {
-    "type": "EMAIL",
-    "to": "example@gmail.com",
-    "message": "Hello..."
-  }
-]
-
-If no action is needed, respond like:
-{
-  "type": "NONE",
-  "message": "your answer"
-}
-
-User input: ${userText}
-`;
-const prompt = `
-You are an AI assistant.
-
-If the user asks to perform an action, respond ONLY in JSON.
-
-Examples:
-
-Reminder:
-{
-  "type": "REMINDER",
-  "message": "Call John",
-  "time": "2026-04-25T18:00:00"
-}
-
-Email:
-{
-  "type": "EMAIL",
-  "to": "example@gmail.com",
-  "message": "Hello..."
-}
-
-If no action:
-{
-  "type": "NONE",
-  "message": "your answer"
-}
-
-User input: ${userText}
-`;
-const result = await model.generateContent(prompt);
-  const response = await result.response;
-
-  return response.text();
-}
 
 // ══════════════════════════════════════════════════════════════
 // ── POST /api/chat — Main Conversation Endpoint ─────────────
 // ══════════════════════════════════════════════════════════════
 
-app.post("/api/chat", async (req, res) => {
-  console.log("🔥 GEMINI ROUTE HIT");
+app.post('/api/chat', async (req, res) => {
   try {
-    const { message } = req.body;
+    const { message, history, sessionId, debug } = req.body;
 
-    console.log("User:", message);
-
-    const generatedText = await getGeminiResponse(message);
-
-    console.log("AI:", generatedText);
-
-    let finalReply;
-
-    try {
-      const parsed = JSON.parse(generatedText);
-
-      if (parsed.type === "NONE") {
-        finalReply = parsed.message;
-      } else {
-        finalReply = JSON.stringify(parsed);
-      }
-    } catch {
-      finalReply = generatedText;
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid message.' });
     }
 
-    res.json({
-      reply: finalReply
+    const enableDebug = debug === true || process.env.DEBUG_MODE === 'true';
+
+    const response = await orchestrate({
+      message: message.trim(),
+      history: history || [],
+      sessionId: sessionId || 'default',
+      debug: enableDebug,
     });
 
+    if (response.isStream && response.stream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders(); // Establish SSE connection immediately
+
+      // Send metadata first
+      const metadata = { ...response };
+      delete metadata.stream;
+      delete metadata.isStream;
+      res.write(`event: metadata\ndata: ${JSON.stringify(metadata)}\n\n`);
+
+      // Stream text chunks
+      for await (const chunk of response.stream) {
+        res.write(`event: chunk\ndata: ${JSON.stringify({ text: chunk })}\n\n`);
+      }
+
+      // Signal completion
+      res.write(`event: done\ndata: {}\n\n`);
+      res.end();
+    } else {
+      // If not streaming (e.g. from cache or template fallback), we still send as SSE
+      // so the frontend only needs to support one format, OR we can just return JSON.
+      // But standardizing on SSE is usually easier for the frontend if it expects it.
+      // Actually, if we return JSON here, the frontend fetch handles it differently.
+      // Let's stick to SSE for all responses from this endpoint for consistency.
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      const metadata = { ...response };
+      delete metadata.stream;
+      delete metadata.isStream;
+      res.write(`event: metadata\ndata: ${JSON.stringify(metadata)}\n\n`);
+      res.write(`event: chunk\ndata: ${JSON.stringify({ text: response.reply })}\n\n`);
+      res.write(`event: done\ndata: {}\n\n`);
+      res.end();
+    }
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      reply: "Error getting AI response"
-    });
+    console.error('[VoxFlow] Server error:', err);
+    // If headers already sent, we can't easily send 500 JSON.
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error.' });
+    } else {
+      res.write(`event: error\ndata: {"error":"Internal server error"}\n\n`);
+      res.end();
+    }
   }
 });
+
 
 // ══════════════════════════════════════════════════════════════
 // ── POST /api/action/confirm — Confirm a Pending Action ─────
@@ -158,7 +140,7 @@ app.post('/api/action/confirm', async (req, res) => {
     }
 
     // Execute the confirmed action
-    const result = await executeConfirmedAction(action);
+    const result = await executeConfirmedAction(action, sessionId);
 
     console.log(`[VoxFlow] ✅ Action confirmed: ${action.type} (${actionId})`);
 
@@ -212,80 +194,6 @@ app.post('/api/action/cancel', (req, res) => {
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// ── POST /api/action/update — Update a Pending Action ───────
-// ══════════════════════════════════════════════════════════════
-
-app.post('/api/action/update', (req, res) => {
-  try {
-    const { actionId, selectedEmail, selectedName, sessionId } = req.body;
-
-    if (!actionId || !sessionId) {
-      return res.status(400).json({ error: 'Missing parameters.' });
-    }
-
-    const session = getSession(sessionId);
-    const action = session.pendingActions.get(actionId);
-
-    if (!action) {
-      return res.status(404).json({ error: 'Action not found or already processed.' });
-    }
-
-    // Update the pending action
-    action.details.recipient_email = selectedEmail;
-    action.details.recipient_name = selectedName;
-    action.status = 'awaiting_confirmation';
-    action.followUp = "Great. Please review the email before sending.";
-    delete action.options; // Clean up disambiguation
-
-    res.json({ status: 'updated', action });
-  } catch (err) {
-    console.error('[VoxFlow] Action update error:', err);
-    res.status(500).json({ error: 'Failed to update action.' });
-  }
-});
-
-// ══════════════════════════════════════════════════════════════
-// ── POST /api/action/regenerate — Regenerate Action Content ─
-// ══════════════════════════════════════════════════════════════
-
-app.post('/api/action/regenerate', async (req, res) => {
-  try {
-    const { actionId, sessionId } = req.body;
-    if (!actionId || !sessionId) {
-      return res.status(400).json({ error: 'Missing parameters.' });
-    }
-
-    const session = getSession(sessionId);
-    const action = session.pendingActions.get(actionId);
-
-    if (!action || action.intent !== 'email') {
-      return res.status(404).json({ error: 'Valid email action not found.' });
-    }
-
-    const maxRegens = 3;
-    const currentRegens = action.details.regenCount || 0;
-    if (currentRegens >= maxRegens) {
-      return res.status(400).json({ error: 'Maximum regenerations reached.' });
-    }
-
-    // We only import what we need dynamically to regenerate the text
-    const { regenerateEmailDraft } = await import('./actionExecutor.js');
-    const newDraft = await regenerateEmailDraft(action.details.raw);
-    
-    if (newDraft) {
-      action.details.subject = newDraft.subject;
-      action.details.content = newDraft.draft;
-      action.details.regenCount = currentRegens + 1;
-    }
-
-    res.json({ status: 'regenerated', action });
-  } catch (err) {
-    console.error('[VoxFlow] Action regenerate error:', err);
-    res.status(500).json({ error: 'Failed to regenerate action.' });
-  }
-});
-
 
 // ══════════════════════════════════════════════════════════════
 // ── GET /api/config — Public Config for Frontend ────────────
@@ -303,8 +211,46 @@ app.get('/api/config', (req, res) => {
 
 
 // ══════════════════════════════════════════════════════════════
-// ── GET /api/health — Health Check ──────────────────────────
+// ── GET /api/reminders/events — SSE Stream for Reminders ────
 // ══════════════════════════════════════════════════════════════
+
+app.get('/api/reminders/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // Send a heartbeat every 30s to keep the connection alive
+  const heartbeat = setInterval(() => {
+    res.write('event: heartbeat\ndata: {}\n\n');
+  }, 30000);
+
+  // Register for reminder events
+  const unsubscribe = onReminderFired((event) => {
+    res.write(`event: reminder\ndata: ${JSON.stringify(event)}\n\n`);
+  });
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+
+  console.log('[VoxFlow] 🔔 SSE reminder listener connected');
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// ── GET /api/reminders — List Active Reminders ──────────────
+// ══════════════════════════════════════════════════════════════
+
+app.get('/api/reminders', (req, res) => {
+  const sessionId = req.query.sessionId || 'default';
+  const reminders = getReminders(sessionId);
+  res.json({ reminders });
+});
+
+
 
 app.get('/api/health', async (req, res) => {
   const retrieval = await getRetrievalHealth();
@@ -312,11 +258,12 @@ app.get('/api/health', async (req, res) => {
   res.json({
     status: 'ok',
     service: 'VoxFlow Orchestrator API',
-    version: '3.1.0',
-    architecture: 'Orchestrator Pipeline',
-    tools: ['retrieval', 'api', 'reasoning'],
-    llmAvailable: true,
+    version: '3.2.0',
+    architecture: 'Orchestrator Pipeline + Memory Layer',
+    tools: ['retrieval', 'api', 'reasoning', 'memory'],
+    llmAvailable: isLLMAvailable(),
     qdrantReady: isQdrantReady(),
+    memoryReady: isMemoryReady(),
     retrieval,
     vapiEnabled: !!(process.env.VAPI_PUBLIC_KEY && process.env.VAPI_ASSISTANT_ID),
     timestamp: new Date().toISOString(),
@@ -338,13 +285,53 @@ app.get('/api/health/retrieval', async (req, res) => {
   }
 });
 
+app.get('/api/health/memory', async (req, res) => {
+  try {
+    const memory = await getMemoryHealth();
+    res.json({ status: 'ok', memory });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err?.message || 'Failed to inspect memory health' });
+  }
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// ── DELETE /api/memory/:sessionId — Clear Memory ────────────
+// ══════════════════════════════════════════════════════════════
+
+app.delete('/api/memory/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId.' });
+    }
+
+    const result = await clearMemory(sessionId);
+    console.log(`[VoxFlow] 🗑️ Memory cleared for session: ${sessionId.substring(0, 16)}...`);
+
+    res.json({
+      status: 'cleared',
+      sessionId: sessionId.substring(0, 16) + '...',
+      details: result.details,
+    });
+  } catch (err) {
+    console.error('[VoxFlow] Memory clear error:', err);
+    res.status(500).json({ error: 'Failed to clear memory.' });
+  }
+});
+
 
 // ── Start ──
 app.listen(PORT, () => {
   const vapiStatus = process.env.VAPI_PUBLIC_KEY ? '✅ Vapi Voice' : '⚠️ Vapi not configured (browser fallback)';
   const qdrantStatus = isQdrantReady() ? '✅ Python Qdrant backend' : '⚠️ Qdrant not available (in-memory fallback)';
 
-  console.log(`🔥 GEMINI SERVER running on http://localhost:${PORT}`);
+  const memoryStatus = isMemoryReady() ? '✅ Memory layer' : '⚠️ Memory not available (short-term only)';
+
+  console.log(`[VoxFlow] 🚀 Orchestrator API v3.2 running on http://localhost:${PORT}`);
+  console.log(`[VoxFlow] 🔧 Pipeline: Intent → Classify → Route → Memory → Generate`);
+  console.log(`[VoxFlow] 🛠️  Tools: Retrieval | API | Reasoning | Memory`);
   console.log(`[VoxFlow] 🎙️  Voice: ${vapiStatus}`);
   console.log(`[VoxFlow] 🔍 Search: ${qdrantStatus}`);
+  console.log(`[VoxFlow] 🧠 Memory: ${memoryStatus}`);
 });

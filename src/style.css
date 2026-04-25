@@ -189,6 +189,8 @@ body {
 .brand-icon {
   width: 36px;
   height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .brand-name {
@@ -306,6 +308,13 @@ body {
 .message-avatar svg {
   width: 28px;
   height: 28px;
+}
+
+.avatar-logo {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .message-content {
@@ -1048,4 +1057,102 @@ body {
 .debug-toggle.active .debug-switch::after {
   left: 16px;
   background: #a9a3ff;
+}
+
+/* --- Clear Memory Button --- */
+.clear-memory-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 107, 107, 0.2);
+  background: rgba(255, 107, 107, 0.06);
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.clear-memory-btn:hover {
+  background: rgba(255, 107, 107, 0.14);
+  border-color: rgba(255, 107, 107, 0.4);
+  color: #FF6B6B;
+  transform: translateY(-1px);
+}
+
+.clear-memory-btn:active {
+  transform: translateY(0);
+}
+
+.clear-memory-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.clear-memory-btn.clearing {
+  border-color: rgba(255, 217, 61, 0.3);
+  background: rgba(255, 217, 61, 0.08);
+  color: #FFD93D;
+}
+
+.clear-memory-btn svg {
+  flex-shrink: 0;
+}
+
+/* --- Memory Badge --- */
+.badge-memory {
+  background: rgba(186, 85, 211, 0.12);
+  color: #CE93D8;
+  border: 1px solid rgba(186, 85, 211, 0.25);
+}
+
+/* --- Memory Indicator --- */
+.memory-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-sm);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(186, 85, 211, 0.06);
+  border: 1px solid rgba(186, 85, 211, 0.15);
+  animation: memoryFadeIn 0.4s var(--ease-out);
+}
+
+.memory-indicator-icon {
+  font-size: 0.85rem;
+  animation: memoryPulse 2s ease-in-out infinite;
+}
+
+.memory-indicator-text {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #CE93D8;
+  letter-spacing: 0.02em;
+}
+
+@keyframes memoryFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes memoryPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* --- Mobile: Clear Memory Button --- */
+@media (max-width: 600px) {
+  .clear-memory-btn span {
+    display: none;
+  }
+  .clear-memory-btn {
+    padding: 6px 8px;
+  }
 }

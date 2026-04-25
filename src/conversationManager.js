@@ -4,11 +4,6 @@
  * Displays tool-usage badges, source citations, action confirmation cards,
  * and optional debug panel on assistant messages.
  */
-import { parseAIResponse } from './actions/responseParser.js';
-import { chunkActions } from './utils/chunker.js';
-// const { chunkActions } = require('./utils/chunker');
-// import { parseAIResponse } from "./actions/actionParser.js";
-import { executeAction } from "./actions/actionExecutor.js";
 
 const MAX_HISTORY = 20;
 
@@ -16,6 +11,7 @@ const TOOL_BADGES = {
   retrieval: { icon: '🔍', label: 'Retrieved', className: 'badge-retrieval' },
   api:       { icon: '⚡', label: 'Action',    className: 'badge-api' },
   reasoning: { icon: '🧠', label: 'Reasoning', className: 'badge-reasoning' },
+  memory:    { icon: '💾', label: 'Memory',    className: 'badge-memory' },
 };
 
 const QUERY_TYPE_LABELS = {
@@ -31,7 +27,20 @@ export class ConversationManager {
     this.history = [];
     this.isProcessing = false;
     this.debugMode = false;
-    this.sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Persistent sessionId — survives page reloads via localStorage
+    let storedId = null;
+    try {
+      storedId = localStorage.getItem('voxflow-session-id');
+    } catch {}
+    if (storedId) {
+      this.sessionId = storedId;
+    } else {
+      this.sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        localStorage.setItem('voxflow-session-id', this.sessionId);
+      } catch {}
+    }
   }
 
   setDebugMode(enabled) {
@@ -53,7 +62,7 @@ export class ConversationManager {
     const typingEl = this._showTypingIndicator();
 
     try {
-      const response = await fetch('http://localhost:3002/api/chat', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -66,48 +75,102 @@ export class ConversationManager {
 
       if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
-      const data = await response.json();
-      const reply = data.reply || "Sorry, I didn't quite catch that.";
-      // STEP 1: Parse AI response
-      const parsed = parseAIResponse(reply);
 
-      // STEP 2: Chunk actions
-      const actions = chunkActions(parsed);
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('text/event-stream')) {
+        typingEl.remove();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        
+        let metadata = {};
+        let replyText = '';
+        let msgEl = null;
+        let textNode = null;
+        let buffer = '';
 
-      console.log("🧠 Parsed:", parsed);
-      console.log("⚡ Actions:", actions);
-      import { executeAction } from './actionExecutor';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop(); // Keep the last incomplete part in the buffer
+          
+          for (const part of parts) {
+            const lines = part.split('\n');
+            let eventType = null;
+            let eventData = null;
+            
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                eventType = line.substring(7);
+              } else if (line.startsWith('data: ')) {
+                try {
+                  eventData = JSON.parse(line.substring(6));
+                } catch(e) {}
+              }
+            }
+            
+            if (eventType === 'metadata' && eventData) {
+              metadata = eventData;
+              msgEl = this._renderMessage('assistant', '', {
+                action: metadata.action,
+                toolUsed: metadata.toolUsed,
+                queryType: metadata.queryType,
+                sources: metadata.sources,
+                debug: metadata.debug,
+              });
+              textNode = msgEl.querySelector('.chat-text');
+            } else if (eventType === 'chunk' && eventData && eventData.text) {
+              replyText += eventData.text;
+              if (textNode) {
+                textNode.innerHTML = this._escapeHtml(replyText);
+              }
+              this._scrollToBottom();
+            } else if (eventType === 'done') {
+              // stream finished
+            } else if (eventType === 'error') {
+              throw new Error('Stream error');
+            }
+          }
+        }
+        
+        this.history.push({ role: 'assistant', content: replyText });
+        this.isProcessing = false;
+        this.onStatusChange?.('ready', 'Ready');
 
-      actions.forEach(action => {
-        executeAction(action.payload);
-      });
-      typingEl.remove();
+        // Update memory indicator if memory was used
+        if (metadata.memoryUsed && msgEl) {
+          this._addMemoryIndicator(msgEl, metadata.memoryCount);
+        }
 
-      const parsedResponse = parseAIResponse(reply);
 
-      // 👇 THIS is where chunker comes
-      const actions = chunkActions(parsedResponse);
+        return replyText;
+      } else {
+        const data = await response.json();
+        const reply = data.reply || "Sorry, I didn't quite catch that.";
 
-      // Execute all actions
-      for (const action of actions) {
-        const result = await executeAction(action);
-        console.log("Action Result:", result);
+
+        typingEl.remove();
+        this.history.push({ role: 'assistant', content: reply });
+        const msgEl = this._renderMessage('assistant', reply, {
+          action: data.action,
+          toolUsed: data.toolUsed,
+          queryType: data.queryType,
+          sources: data.sources,
+          debug: data.debug,
+          memoryUsed: data.memoryUsed,
+          memoryCount: data.memoryCount,
+        });
+
+        if (data.memoryUsed && msgEl) {
+          this._addMemoryIndicator(msgEl, data.memoryCount);
+        }
+
+        this.isProcessing = false;
+        this.onStatusChange?.('ready', 'Ready');
+        return reply;
       }
-
-      this.history.push({ role: 'assistant', content: reply });
-
-      this._renderMessage('assistant', reply, {
-        action: data.action,
-        toolUsed: data.toolUsed,
-        queryType: data.queryType,
-        sources: data.sources,
-        debug: data.debug,
-      });
-
-      this.isProcessing = false;
-      this.onStatusChange?.('ready', 'Ready');
-
-      return reply;
 
     } catch (err) {
       console.error('[VoxFlow] Chat error:', err);
@@ -138,40 +201,31 @@ export class ConversationManager {
 
       msgEl.innerHTML = `
         <div class="message-avatar">
-          <svg viewBox="0 0 32 32" fill="none">
-            <circle cx="16" cy="16" r="14" stroke="url(#avatarGrad)" stroke-width="2" fill="none"/>
-            <circle cx="16" cy="16" r="4" fill="url(#avatarGrad)"/>
-            <defs>
-              <linearGradient id="avatarGrad" x1="0" y1="0" x2="32" y2="32">
-                <stop offset="0%" stop-color="#6C63FF"/>
-                <stop offset="100%" stop-color="#00D4AA"/>
-              </linearGradient>
-            </defs>
-          </svg>
+          <img src="/logo.jpeg" alt="VoxFlow" class="avatar-logo" />
         </div>
         <div class="message-content">
           ${badgeHtml}
-          <p>${this._escapeHtml(text)}</p>
+          <p class="chat-text">${this._escapeHtml(text)}</p>
           ${actionHtml}
           ${sourcesHtml}
           ${debugHtml}
         </div>
       `;
 
-      // Bind action button handlers after inserting into DOM
       if (meta.action) {
         setTimeout(() => this._bindActionButtons(msgEl, meta.action), 0);
       }
     } else {
       msgEl.innerHTML = `
         <div class="message-content">
-          <p>${this._escapeHtml(text)}</p>
+          <p class="chat-text">${this._escapeHtml(text)}</p>
         </div>
       `;
     }
 
     this.chatContainer.appendChild(msgEl);
     this._scrollToBottom();
+    return msgEl;
   }
 
   /** Render tool-used badge with query type */
@@ -189,6 +243,16 @@ export class ConversationManager {
     }
 
     return html ? `<div class="badge-row">${html}</div>` : '';
+  }
+
+  /** Add a memory indicator to a message element */
+  _addMemoryIndicator(msgEl, count) {
+    const content = msgEl.querySelector('.message-content');
+    if (!content) return;
+    const indicator = document.createElement('div');
+    indicator.className = 'memory-indicator';
+    indicator.innerHTML = `<span class="memory-indicator-icon">🧠</span> <span class="memory-indicator-text">Used ${count} memor${count === 1 ? 'y' : 'ies'} from past conversations</span>`;
+    content.appendChild(indicator);
   }
 
   /** Render source citations */
@@ -511,10 +575,7 @@ export class ConversationManager {
     el.id = 'typingIndicator';
     el.innerHTML = `
       <div class="message-avatar">
-        <svg viewBox="0 0 32 32" fill="none">
-          <circle cx="16" cy="16" r="14" stroke="url(#avatarGrad)" stroke-width="2" fill="none"/>
-          <circle cx="16" cy="16" r="4" fill="url(#avatarGrad)"/>
-        </svg>
+        <img src="/logo.jpeg" alt="VoxFlow" class="avatar-logo" />
       </div>
       <div class="message-content">
         <div class="typing-indicator">
@@ -542,5 +603,36 @@ export class ConversationManager {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /**
+   * Clear all stored memory for this session.
+   * @returns {Promise<boolean>} True if memory was cleared successfully
+   */
+  async clearMemory() {
+    try {
+      const resp = await fetch(`/api/memory/${encodeURIComponent(this.sessionId)}`, {
+        method: 'DELETE',
+      });
+
+      if (!resp.ok) {
+        console.error('[VoxFlow] Failed to clear memory:', resp.status);
+        return false;
+      }
+
+      const data = await resp.json();
+      console.log('[VoxFlow] Memory cleared:', data);
+
+      // Show a confirmation message in the chat
+      this._renderMessage('assistant', '🧠 Memory cleared! I\'ve forgotten our previous conversations. We\'re starting fresh.', {
+        toolUsed: 'memory',
+        queryType: 'GENERAL',
+      });
+
+      return true;
+    } catch (err) {
+      console.error('[VoxFlow] Memory clear error:', err);
+      return false;
+    }
   }
 }

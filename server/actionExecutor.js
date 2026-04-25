@@ -2,8 +2,12 @@
  * VoxFlow — Action Executor
  * Prepares, validates, and manages action execution.
  * Actions are NEVER executed without explicit user confirmation.
+ *
+ * Reminders are REAL — they schedule a local timer and fire
+ * browser notifications via SSE when the time comes.
  */
 
+import { createReminder, getReminders, cancelReminder } from './reminderStore.js';
 import nodemailer from 'nodemailer';
 
 let groqClient = null;
@@ -11,7 +15,7 @@ let llmInitialized = false;
 
 async function ensureLLM() {
   if (llmInitialized) return;
-  
+
   if (process.env.GROQ_API_KEY) {
     try {
       const { default: Groq } = await import('groq-sdk');
@@ -53,8 +57,8 @@ const ACTION_TEMPLATES = {
     icon: '🔔',
     description: 'Setting a new reminder',
     requiredFields: ['what', 'when'],
-    followUp: "Got it! I'll set that reminder for you. Can you confirm what I should remind you about and when?",
-    confirmMessage: "Your reminder has been set successfully!",
+    followUp: "Got it! I'll set that reminder for you. Can you confirm the details?",
+    confirmMessage: "Your reminder has been set!",
   },
   schedule: {
     type: 'Calendar Event',
@@ -96,12 +100,23 @@ export async function prepareAction(intent, message) {
   // Extract details (async for LLM calls)
   const details = await extractActionDetails(intent, message);
 
+  let followUp = template.followUp;
+  if (intent === 'reminder') {
+    if (details.what && details.when) {
+      followUp = `Got it! I'll remind you to "${details.what}" at ${details.when}. Please confirm to set this reminder.`;
+    } else if (details.what && !details.when) {
+      followUp = `I'll remind you to "${details.what}". When should I remind you? (e.g., "in 5 minutes", "at 3pm", "tomorrow at 10am")`;
+    } else {
+      followUp = `Sure, I can set a reminder! What should I remind you about, and when? (e.g., "Remind me to check email at 3pm")`;
+    }
+  }
+
   const action = {
     type: template.type,
     icon: template.icon,
     description: template.description,
     status: 'awaiting_confirmation',
-    followUp: template.followUp,
+    followUp,
     confirmMessage: template.confirmMessage,
     details,
     intent,
@@ -126,10 +141,26 @@ async function extractActionDetails(intent, message) {
 
   switch (intent) {
     case 'reminder': {
-      const reminderMatch = message.match(/remind(?:\s+me)?\s+(?:to\s+)?(.+?)(?:\s+(?:at|on|in|by)\s+(.+))?$/i);
+      // Try to extract "remind me to X at/on/in Y"
+      const reminderMatch = message.match(/remind(?:\s+me)?\s+(?:to\s+)?(.+?)\s+(?:at|on|in|by|after)\s+(.+)$/i);
       if (reminderMatch) {
         details.what = reminderMatch[1]?.trim();
         details.when = reminderMatch[2]?.trim();
+      } else {
+        // Try "remind me to X" (no time)
+        const whatOnly = message.match(/remind(?:\s+me)?\s+(?:to\s+)?(.+)$/i);
+        if (whatOnly) {
+          details.what = whatOnly[1]?.trim();
+        }
+        // Try to find a time anywhere: "at 3pm", "in 5 min", "tomorrow"
+        const timeMatch = message.match(/(?:at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)|in\s+\d+\s*(?:min|minute|hour|hr|second|sec|day)s?|tomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)/i);
+        if (timeMatch) {
+          details.when = timeMatch[0]?.trim();
+          // Remove the time part from "what" if it was captured there
+          if (details.what) {
+            details.what = details.what.replace(timeMatch[0], '').trim();
+          }
+        }
       }
       break;
     }
@@ -142,6 +173,7 @@ async function extractActionDetails(intent, message) {
       }
       break;
     }
+
     case 'note': {
       const noteMatch = message.match(/(?:note|note down|save|remember)\s+(?:that\s+)?(.+)/i);
       if (noteMatch) {
@@ -166,7 +198,7 @@ Output ONLY a JSON block like:
   "draft": "Dear [Name],\\n\\n[Body]\\n\\nBest regards,\\nDivya Singh"
 }
 Do not return markdown ticks. Just the JSON.`;
-          
+
           let rawResponse = '';
           if (groqClient.isGemini) {
             const result = await groqClient.model.generateContent(prompt);
@@ -179,10 +211,10 @@ Do not return markdown ticks. Just the JSON.`;
             });
             rawResponse = chatCompletion.choices[0].message.content;
           }
-          
+
           rawResponse = rawResponse.trim().replace(/^`{3}(json)?|`{3}$/g, '');
           const parsed = JSON.parse(rawResponse);
-          
+
           details.intended_recipient = parsed.recipient;
           details.subject = parsed.subject;
           details.content = parsed.draft;
@@ -265,9 +297,10 @@ Do not return markdown ticks. Just the JSON.`;
 /**
  * Execute a confirmed action.
  * @param {object} action - The confirmed action object
- * @returns {Promise<{ success: boolean, message: string }>}
+ * @param {string} sessionId - The session ID for ownership
+ * @returns {Promise<{ success: boolean, message: string, reminder?: any, executedAt?: number }>}
  */
-export async function executeConfirmedAction(action) {
+export async function executeConfirmedAction(action, sessionId) {
   const template = ACTION_TEMPLATES[action.intent];
   console.log(`[VoxFlow] ⚡ Executing action: ${action.type}`, action.details);
 
@@ -279,7 +312,7 @@ export async function executeConfirmedAction(action) {
     const subject = action.details.subject || 'Automated Email via VoxFlow';
 
     // To send emails from smadhumitha1708@gmail.com, SMTP_PASS must be exactly the app password provided via env.
-    const smtpUser = 'smadhumitha1708@gmail.com'; 
+    const smtpUser = 'smadhumitha1708@gmail.com';
 
     if (process.env.SMTP_PASS) {
       try {
@@ -308,6 +341,29 @@ export async function executeConfirmedAction(action) {
     }
   }
 
+  if (action.intent === 'reminder') {
+    const result = createReminder({
+      what: action.details?.what || 'Reminder',
+      when: action.details?.when || '',
+      sessionId: sessionId || 'default',
+    });
+
+    if (!result.success) {
+      return {
+        success: false,
+        message: result.error || 'Failed to set reminder.',
+      };
+    }
+
+    return {
+      success: true,
+      message: `🔔 Reminder set! I'll notify you ${result.reminder.whenHuman} — "${result.reminder.what}"`,
+      reminder: result.reminder,
+      executedAt: Date.now(),
+    };
+  }
+
+  // Other actions: simulated (would call real APIs in production)
   return {
     success: true,
     message: confirmMsg,

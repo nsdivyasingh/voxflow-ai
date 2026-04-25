@@ -32,12 +32,16 @@ const INTENTS = [
   { name: 'news',         patterns: [/\b(news|headlines|what.s happening|current events)\b/i] },
   { name: 'music',        patterns: [/\b(play music|song|playlist|music)\b/i] },
   { name: 'note',         patterns: [/\b(take a note|save this|note down|remember this)\b/i] },
-  { name: 'memory',       patterns: [/\b(what did we|what we discussed|our conversation|previous|last time|discussed yesterday|talked about)\b/i] },
+  { name: 'memory',       patterns: [
+    /\b(what did we|what we discussed|our conversation|previous|last time|discussed yesterday|talked about)\b/i,
+    /\b(do you remember|you remember|recall|what did i say|what i said|what i told you|my name is|what.s my name|my preference|my favorite)\b/i,
+    /\b(remember when|we talked|earlier i|previously i|last session|past conversation)\b/i,
+  ] },
 ];
 
 // ── Query Type Categories ────────────────────────────────────
 const KNOWLEDGE_INTENTS = new Set([
-  'capabilities', 'weather', 'search', 'news', 'calculate', 'music', 'memory',
+  'weather', 'search', 'news', 'calculate', 'music', 'memory',
 ]);
 
 const ACTION_INTENTS = new Set([
@@ -45,7 +49,7 @@ const ACTION_INTENTS = new Set([
 ]);
 
 const GENERAL_INTENTS = new Set([
-  'greeting', 'farewell', 'thanks', 'joke', 'name', 'status', 'time', 'date',
+  'greeting', 'farewell', 'thanks', 'joke', 'name', 'status', 'time', 'date', 'capabilities',
 ]);
 
 /**
@@ -70,6 +74,43 @@ export function detectIntent(message) {
   // Catch short conversational niceties that often miss strict patterns.
   if (/^(gm|gn|good day|hiya|hii+|helloo+)\b/.test(normalizedMessage)) {
     return 'greeting';
+  }
+
+  // Fallback: Token overlap check (Fuzzy matching)
+  const tokens = normalizedMessage.split(' ').filter(t => t.length > 2);
+  if (tokens.length > 0) {
+    let bestIntent = 'general';
+    let maxMatches = 0;
+
+    const keywordsMap = {
+      weather: ['weather', 'temperature', 'forecast', 'rain', 'sunny', 'climate', 'hot', 'cold'],
+      schedule: ['schedule', 'meeting', 'appointment', 'calendar', 'event', 'book'],
+      email: ['email', 'mail', 'compose', 'inbox'],
+      reminder: ['remind', 'reminder', 'alert', 'notify', 'forget'],
+      search: ['search', 'look', 'find', 'google', 'know'],
+      joke: ['joke', 'funny', 'laugh'],
+      calculate: ['calculate', 'math', 'add', 'subtract', 'multiply', 'divide', 'compute'],
+      news: ['news', 'headlines', 'happening', 'breaking'],
+      music: ['music', 'song', 'playlist', 'play', 'spotify', 'track'],
+      memory: ['discussed', 'yesterday', 'talked', 'remember', 'last', 'recall', 'name', 'preference', 'favorite', 'earlier', 'previous', 'session']
+    };
+
+    for (const [intentName, keywords] of Object.entries(keywordsMap)) {
+      let matches = 0;
+      for (const token of tokens) {
+        if (keywords.includes(token)) {
+          matches++;
+        }
+      }
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        bestIntent = intentName;
+      }
+    }
+    
+    if (maxMatches > 0) {
+      return bestIntent;
+    }
   }
 
   return 'general';

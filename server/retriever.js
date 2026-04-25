@@ -297,15 +297,56 @@ function inMemoryRetrieve(message, topK = 3) {
 // ══════════════════════════════════════════════════════════════
 
 /**
- * Retrieve relevant knowledge — uses Qdrant when available, in-memory fallback otherwise.
+ * Retrieve relevant knowledge.
+ * Priority: 1) Python backend (has real project data), 2) direct Qdrant, 3) in-memory fallback.
  * @param {string} message
  * @param {number} topK
- * @returns {Promise<{answer: string, context: Array, insights: Array, results: Array, contextText: string, sources: string[]}>}
+ * @returns {Promise<{answer: string, context: Array, insights: object, results: Array, contextText: string, sources: string[]}>}
  */
 export async function retrieve(message, topK = 3) {
-  // Always route through qdrantRetrieve so it can try:
-  // 1) direct Qdrant, 2) Python backend, 3) in-memory fallback.
-  return qdrantRetrieve(message, topK);
+  // ── Try Python backend first (has real project data) ──
+  const { pythonApiUrl } = getRetrieverConfig();
+  if (pythonApiUrl) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      const response = await fetch(`${pythonApiUrl}/ask?q=${encodeURIComponent(message)}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const data = await response.json();
+        const context = Array.isArray(data.context) ? data.context : [];
+        const insights = data.insights && typeof data.insights === 'object' ? data.insights : {};
+        const answer = typeof data.answer === 'string' ? data.answer : '';
+        const results = context;
+        const contextText = results.map(r => r.text || r.content || '').join('\n\n');
+        const sources = [...new Set(results.map(r => r.source || 'Project Data'))];
+        lastRetrieverPath = 'python_backend';
+        lastPythonError = null;
+        console.log(`[VoxFlow] 🐍 Python backend query: "${data.refined_query || message}" (${results.length} results)`);
+        return { answer, context, insights, results, contextText, sources };
+      }
+      lastPythonError = `HTTP ${response.status}`;
+    } catch (pythonErr) {
+      lastPythonError = pythonErr?.message || String(pythonErr);
+      console.warn('[VoxFlow] ⚠️ Python backend unavailable:', lastPythonError);
+    }
+  }
+
+  // ── Try direct Qdrant ──
+  if (qdrantReady) {
+    try {
+      return await qdrantRetrieve(message, topK);
+    } catch (err) {
+      console.warn('[VoxFlow] ⚠️ Direct Qdrant failed, using in-memory fallback');
+    }
+  }
+
+  // ── In-memory fallback ──
+  lastRetrieverPath = 'in_memory';
+  return inMemoryRetrieve(message, topK);
 }
 
 export async function getRetrievalHealth() {

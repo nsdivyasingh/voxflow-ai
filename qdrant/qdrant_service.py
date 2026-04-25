@@ -1,9 +1,10 @@
 import os
 import re
+from pathlib import Path
 try:
     from dotenv import load_dotenv
 except Exception:
-    def load_dotenv():
+    def load_dotenv(*args, **kwargs):
         return False
 from mock import data as mock_data
 
@@ -15,7 +16,9 @@ except Exception:
     PointStruct = None
     Document = None
 
-load_dotenv()
+# Load .env from parent directory (project root)
+_env_path = Path(__file__).resolve().parent.parent / '.env'
+load_dotenv(_env_path)
 
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")

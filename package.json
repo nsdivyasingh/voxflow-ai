@@ -8,7 +8,7 @@
     "dev:clean": "kill-port 3001 5173 5174 8001",
     "dev:frontend": "vite",
     "dev:backend": "nodemon --watch server --ext js --exec \"node server/index.js\"",
-    "dev:python": "cd qdrant && uvicorn main:app --reload --port 8001",
+    "dev:python": "cd qdrant && ..\\.venv\\Scripts\\python.exe -m uvicorn main:app --reload --port 8001",
     "build": "vite build",
     "preview": "vite preview"
   },

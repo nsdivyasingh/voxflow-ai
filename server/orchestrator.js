@@ -19,6 +19,13 @@ import { getSession, recordTopic, storePendingAction, retrieveMemory, analyzeCon
 import { retrieve } from './retriever.js';
 import { prepareAction } from './actionExecutor.js';
 import { generateResponse } from './responseGenerator.js';
+import {
+  recordTurn,
+  recallAll,
+  tickAndMaybeSummarize,
+  extractAndStoreEntities,
+  isMemoryReady,
+} from './memoryLayer.js';
 
 /**
  * Main orchestration pipeline.
@@ -32,6 +39,9 @@ import { generateResponse } from './responseGenerator.js';
  */
 export async function orchestrate({ message, history = [], sessionId = 'default', debug = false }) {
   const startTime = Date.now();
+
+  // ── Step 0: Record user turn in memory ──
+  recordTurn(sessionId, 'user', message);
 
   // ── Step 1: Intent Detection ──
   const intent = detectIntent(message);
@@ -54,16 +64,39 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
   let toolUsed = 'reasoning';
   let retrievedAnswer = '';
   let retrievalInsights = {};
+  let memoryContext = '';
+  let memorySources = [];
+  let memoryCount = 0;
+
+  // ── Step 4a: Recall relevant memories for context ──
+  if (isMemoryReady() && queryType !== 'GENERAL') {
+    try {
+      const recalled = await recallAll(sessionId, message);
+      memoryContext = recalled.memoryContext;
+      memorySources = recalled.memorySources;
+      memoryCount = recalled.memoryCount;
+    } catch (err) {
+      console.warn('[VoxFlow] Memory recall failed:', err.message);
+    }
+  }
 
   if (queryType === 'KNOWLEDGE') {
     toolUsed = 'retrieval';
 
     // Special case: conversation memory retrieval
     if (intent === 'memory') {
-      const memory = retrieveMemory(session);
-      if (memory) {
-        contextText = `Here's a summary of what we've discussed so far:\n${memory}\n\nWould you like to revisit any of these topics?`;
-        sources = ['Conversation Memory'];
+      // Combine session memory with long-term memory
+      const sessionMemory = retrieveMemory(session);
+      const parts = [];
+      if (sessionMemory) {
+        parts.push(`Recent topics:\n${sessionMemory}`);
+      }
+      if (memoryContext) {
+        parts.push(memoryContext);
+      }
+      if (parts.length > 0) {
+        contextText = `Here's what I remember:\n\n${parts.join('\n\n')}\n\nWould you like to revisit any of these topics?`;
+        sources = ['Conversation Memory', ...memorySources];
       } else {
         contextText = '';
         sources = ['Conversation Memory'];
@@ -99,32 +132,45 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
 
   // ── Step 5: Generate Response ──
   let finalReply = '';
+  let isStream = false;
+  let responseStream = null;
+
   if (queryType === 'KNOWLEDGE' && intent === 'memory' && contextText) {
     finalReply = contextText;
   } else if (queryType === 'KNOWLEDGE' && retrievedAnswer) {
     // For Python-backed retrieval answers, avoid a second LLM generation call.
     finalReply = retrievedAnswer;
   } else {
-    finalReply = await generateResponse({
+    const genResult = await generateResponse({
       queryType,
       intent,
       message,
       contextText,
+      memoryContext,
       action,
       history,
       conversationContext,
     });
+    
+    isStream = genResult.isStream;
+    if (isStream) {
+      responseStream = genResult.stream;
+    } else {
+      finalReply = genResult.reply;
+    }
   }
 
   // ── Step 6: Build response envelope ──
   const latencyMs = Date.now() - startTime;
 
   const response = {
+    isStream,
     reply: finalReply,
+    stream: responseStream,
     intent,
     queryType,
     toolUsed,
-    sources,
+    sources: [...sources, ...memorySources],
     action: action ? {
       id: action.id,
       type: action.type,
@@ -138,6 +184,8 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
       confirmMessage: action.confirmMessage,
     } : null,
     insights: retrievalInsights,
+    memoryUsed: memoryCount > 0,
+    memoryCount,
   };
 
   // ── Debug trace (only included when debug=true) ──
@@ -159,9 +207,21 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
   }
 
   // ── Console logging ──
+  const memTag = memoryCount > 0 ? ` | Memory: ${memoryCount} recalled` : '';
   console.log(
-    `[VoxFlow] ${queryType} | Tool: ${toolUsed} | Intent: ${intent} | Latency: ${latencyMs}ms | Msg: "${message.substring(0, 60)}"`
+    `[VoxFlow] ${queryType} | Tool: ${toolUsed} | Intent: ${intent} | Latency: ${latencyMs}ms${memTag} | Msg: "${message.substring(0, 60)}"`
   );
+
+  // ── Step 7: Post-response memory operations (fire-and-forget) ──
+  // Record the assistant reply in short-term memory
+  const replyForMemory = finalReply || '';
+  if (replyForMemory) {
+    recordTurn(sessionId, 'assistant', replyForMemory);
+  }
+
+  // Trigger periodic summarization and entity extraction (non-blocking)
+  tickAndMaybeSummarize(sessionId).catch(() => {});
+  extractAndStoreEntities(sessionId, message).catch(() => {});
 
   return response;
 }
