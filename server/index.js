@@ -76,7 +76,7 @@ app.post('/api/chat', async (req, res) => {
 // ── POST /api/action/confirm — Confirm a Pending Action ─────
 // ══════════════════════════════════════════════════════════════
 
-app.post('/api/action/confirm', (req, res) => {
+app.post('/api/action/confirm', async (req, res) => {
   try {
     const { actionId, sessionId } = req.body;
 
@@ -92,7 +92,7 @@ app.post('/api/action/confirm', (req, res) => {
     }
 
     // Execute the confirmed action
-    const result = executeConfirmedAction(action);
+    const result = await executeConfirmedAction(action);
 
     console.log(`[VoxFlow] ✅ Action confirmed: ${action.type} (${actionId})`);
 
@@ -143,6 +143,80 @@ app.post('/api/action/cancel', (req, res) => {
   } catch (err) {
     console.error('[VoxFlow] Action cancel error:', err);
     res.status(500).json({ error: 'Failed to cancel action.' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── POST /api/action/update — Update a Pending Action ───────
+// ══════════════════════════════════════════════════════════════
+
+app.post('/api/action/update', (req, res) => {
+  try {
+    const { actionId, selectedEmail, selectedName, sessionId } = req.body;
+
+    if (!actionId || !sessionId) {
+      return res.status(400).json({ error: 'Missing parameters.' });
+    }
+
+    const session = getSession(sessionId);
+    const action = session.pendingActions.get(actionId);
+
+    if (!action) {
+      return res.status(404).json({ error: 'Action not found or already processed.' });
+    }
+
+    // Update the pending action
+    action.details.recipient_email = selectedEmail;
+    action.details.recipient_name = selectedName;
+    action.status = 'awaiting_confirmation';
+    action.followUp = "Great. Please review the email before sending.";
+    delete action.options; // Clean up disambiguation
+
+    res.json({ status: 'updated', action });
+  } catch (err) {
+    console.error('[VoxFlow] Action update error:', err);
+    res.status(500).json({ error: 'Failed to update action.' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── POST /api/action/regenerate — Regenerate Action Content ─
+// ══════════════════════════════════════════════════════════════
+
+app.post('/api/action/regenerate', async (req, res) => {
+  try {
+    const { actionId, sessionId } = req.body;
+    if (!actionId || !sessionId) {
+      return res.status(400).json({ error: 'Missing parameters.' });
+    }
+
+    const session = getSession(sessionId);
+    const action = session.pendingActions.get(actionId);
+
+    if (!action || action.intent !== 'email') {
+      return res.status(404).json({ error: 'Valid email action not found.' });
+    }
+
+    const maxRegens = 3;
+    const currentRegens = action.details.regenCount || 0;
+    if (currentRegens >= maxRegens) {
+      return res.status(400).json({ error: 'Maximum regenerations reached.' });
+    }
+
+    // We only import what we need dynamically to regenerate the text
+    const { regenerateEmailDraft } = await import('./actionExecutor.js');
+    const newDraft = await regenerateEmailDraft(action.details.raw);
+    
+    if (newDraft) {
+      action.details.subject = newDraft.subject;
+      action.details.content = newDraft.draft;
+      action.details.regenCount = currentRegens + 1;
+    }
+
+    res.json({ status: 'regenerated', action });
+  } catch (err) {
+    console.error('[VoxFlow] Action regenerate error:', err);
+    res.status(500).json({ error: 'Failed to regenerate action.' });
   }
 });
 

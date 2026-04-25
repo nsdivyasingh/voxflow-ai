@@ -23,7 +23,7 @@ const INTENTS = [
   { name: 'date',         patterns: [/\b(what date|today.s date|what day|current date)\b/i] },
   { name: 'reminder',     patterns: [/\b(remind|reminder|set a reminder|don.t forget)\b/i] },
   { name: 'schedule',     patterns: [/\b(schedule|meeting|appointment|calendar|event|book a)\b/i] },
-  { name: 'email',        patterns: [/\b(email|send.*mail|compose.*email|write.*email)\b/i] },
+  { name: 'email',        patterns: [/\b(email|send.*mail|compose.*email|write.*email|apply.*leave|seek.*leave|request.*leave)\b/i] },
   { name: 'search',       patterns: [/\b(search|look up|find|google|look for|search for)\b/i] },
   { name: 'joke',         patterns: [/\b(joke|funny|make me laugh|tell me something funny)\b/i] },
   { name: 'name',         patterns: [/\b(your name|who are you|what are you|introduce yourself)\b/i] },

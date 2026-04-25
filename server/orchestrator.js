@@ -87,7 +87,7 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
     toolUsed = 'api';
 
     // Prepare action but do NOT execute
-    action = prepareAction(intent, message);
+    action = await prepareAction(intent, message);
 
     if (action) {
       // Store as pending — awaits user confirmation
@@ -128,10 +128,14 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
     action: action ? {
       id: action.id,
       type: action.type,
+      intent: action.intent,
       icon: action.icon,
       status: action.status,
       description: action.description,
       details: action.details,
+      options: action.options,
+      followUp: action.followUp,
+      confirmMessage: action.confirmMessage,
     } : null,
     insights: retrievalInsights,
   };

@@ -14,26 +14,40 @@
 // ── LLM Integration ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
 
-let geminiModel = null;
+let llmClient = null;
 
 /**
  * Initialize the LLM provider if an API key is available.
  * Called once at server startup.
  */
 export async function initLLM() {
-  const provider = process.env.LLM_PROVIDER || 'gemini';
-  const geminiKey = process.env.GEMINI_API_KEY;
+  const isGroq = !!process.env.GROQ_API_KEY;
+  const isGemini = !!process.env.GEMINI_API_KEY;
 
-  if (provider === 'gemini' && geminiKey) {
+  if (isGroq) {
+    try {
+      const { default: Groq } = await import('groq-sdk');
+      llmClient = {
+        client: new Groq({ apiKey: process.env.GROQ_API_KEY }),
+        type: 'groq'
+      };
+      console.log('[VoxFlow] ✅ Groq LLM initialized');
+      return true;
+    } catch (err) {
+      console.warn('[VoxFlow] ⚠️ Groq initialization failed:', err.message);
+    }
+  } else if (isGemini) {
     try {
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
-      const genAI = new GoogleGenerativeAI(geminiKey);
-      geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      llmClient = {
+        client: genAI.getGenerativeModel({ model: 'gemini-2.0-flash' }),
+        type: 'gemini'
+      };
       console.log('[VoxFlow] ✅ Gemini LLM initialized');
       return true;
     } catch (err) {
       console.warn('[VoxFlow] ⚠️ Gemini initialization failed:', err.message);
-      return false;
     }
   }
 
@@ -45,7 +59,7 @@ export async function initLLM() {
  * Check if LLM is available.
  */
 export function isLLMAvailable() {
-  return geminiModel !== null;
+  return llmClient !== null;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -69,7 +83,7 @@ const SYSTEM_PROMPT = `You are VoxFlow, a voice-first AI assistant. Follow these
  * @returns {Promise<string>}
  */
 async function llmGenerate({ queryType, intent, message, contextText, history }) {
-  if (!geminiModel) return null;
+  if (!llmClient) return null;
 
   let prompt = '';
 
@@ -82,13 +96,21 @@ async function llmGenerate({ queryType, intent, message, contextText, history })
   }
 
   try {
-    const chat = geminiModel.startChat({
-      history: [],
-    });
-
     const fullPrompt = `${SYSTEM_PROMPT}\n\n${prompt}`;
-    const result = await chat.sendMessage(fullPrompt);
-    const text = result.response.text();
+    let text = '';
+
+    if (llmClient.type === 'groq') {
+      const response = await llmClient.client.chat.completions.create({
+        messages: [{ role: 'user', content: fullPrompt }],
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.3,
+      });
+      text = response.choices[0].message.content;
+    } else {
+      const chat = llmClient.client.startChat({ history: [] });
+      const result = await chat.sendMessage(fullPrompt);
+      text = result.response.text();
+    }
 
     // Ensure response isn't too long for voice
     return truncateForVoice(text);
