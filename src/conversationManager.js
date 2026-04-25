@@ -211,6 +211,27 @@ export class ConversationManager {
       ? this._renderActionDetails(action.details)
       : '';
 
+    let optionsHtml = '';
+    if (action.options && action.status === 'needs_disambiguation') {
+      optionsHtml = `<div class="action-options-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">`;
+      action.options.forEach((opt) => {
+        optionsHtml += `<button class="action-btn select-option" style="text-align: left; background: rgba(255,255,255,0.05); padding: 8px; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; cursor: pointer;" data-action="select" data-action-id="${action.id}" data-option-email="${opt.email}" data-option-name="${opt.label}">Select: ${this._escapeHtml(opt.label)} &lt;${this._escapeHtml(opt.email)}&gt;</button>`;
+      });
+      optionsHtml += `</div>`;
+    }
+
+    const actionBtnsHtml = action.status === 'needs_disambiguation'
+      ? `${optionsHtml}
+         <div class="action-btns" data-action-id="${action.id}" style="margin-top: 12px; font-size: 0.9em; font-weight: bold; color: orange;">
+           ↑ Click a recipient above to draft the email, then you can Approve it.
+           <button class="action-btn cancel" data-action="cancel" data-action-id="${action.id}" style="margin-top: 8px;">✕ Cancel</button>
+         </div>`
+      : `<div class="action-btns" data-action-id="${action.id}">
+          <button class="action-btn confirm" data-action="confirm" data-action-id="${action.id}">✓ Approve</button>
+          ${action.intent === 'email' && (action.details.regenCount || 0) < 3 ? `<button class="action-btn regenerate" data-action="regenerate" data-action-id="${action.id}">🔄 Regenerate (${3 - (action.details.regenCount || 0)})</button>` : ''}
+          <button class="action-btn cancel" data-action="cancel" data-action-id="${action.id}">✕ Cancel</button>
+        </div>`;
+
     return `
       <div class="action-card" data-action-id="${action.id}">
         <div class="action-card-header">
@@ -218,20 +239,19 @@ export class ConversationManager {
           <div class="action-card-status-badge status-${action.status}">${statusIcon} ${this._formatStatus(action.status)}</div>
         </div>
         <div class="action-card-body">${this._escapeHtml(action.description || '')}</div>
+        ${action.followUp && action.status === 'needs_disambiguation' ? `<div style="font-size: 0.9em; margin-bottom: 8px; opacity: 0.9;">${this._escapeHtml(action.followUp)}</div>` : ''}
         ${detailsHtml}
-        <div class="action-btns" data-action-id="${action.id}">
-          <button class="action-btn confirm" data-action="confirm" data-action-id="${action.id}">✓ Confirm</button>
-          <button class="action-btn cancel" data-action="cancel" data-action-id="${action.id}">✕ Cancel</button>
-        </div>
+        ${actionBtnsHtml}
       </div>
     `;
   }
 
   /** Render extracted action details */
   _renderActionDetails(details) {
+    const hiddenKeys = ['raw', 'options'];
     const entries = Object.entries(details)
-      .filter(([k, v]) => k !== 'raw' && v)
-      .map(([k, v]) => `<span class="detail-item"><strong>${k}:</strong> ${this._escapeHtml(v)}</span>`)
+      .filter(([k, v]) => !hiddenKeys.includes(k) && v)
+      .map(([k, v]) => `<span class="detail-item" style="white-space: pre-wrap;"><strong>${k}:</strong> ${this._escapeHtml(v)}</span>`)
       .join('');
 
     return entries ? `<div class="action-details">${entries}</div>` : '';
@@ -244,20 +264,33 @@ export class ConversationManager {
       confirmed: 'Confirmed',
       cancelled: 'Cancelled',
       pending: 'Pending',
+      needs_disambiguation: 'Needs Disambiguation',
     };
     return labels[status] || status;
   }
 
-  /** Bind confirm/cancel button handlers */
+  /** Bind action buttons */
   _bindActionButtons(msgEl, action) {
     const confirmBtn = msgEl.querySelector(`.action-btn.confirm[data-action-id="${action.id}"]`);
     const cancelBtn = msgEl.querySelector(`.action-btn.cancel[data-action-id="${action.id}"]`);
+    const selectBtns = msgEl.querySelectorAll(`button.select-option[data-action-id="${action.id}"]`);
+    const regenBtn = msgEl.querySelector(`button.regenerate[data-action-id="${action.id}"]`);
 
     if (confirmBtn) {
       confirmBtn.addEventListener('click', () => this._handleActionConfirm(action.id, msgEl));
     }
     if (cancelBtn) {
       cancelBtn.addEventListener('click', () => this._handleActionCancel(action.id, msgEl));
+    }
+    selectBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const optionEmail = e.currentTarget.getAttribute('data-option-email');
+        const optionName = e.currentTarget.getAttribute('data-option-name');
+        this._handleActionSelect(action.id, optionEmail, optionName, msgEl);
+      });
+    });
+    if (regenBtn) {
+      regenBtn.addEventListener('click', () => this._handleRegenerate(action.id, msgEl));
     }
   }
 
@@ -288,6 +321,40 @@ export class ConversationManager {
     }
   }
 
+  /** Handle action selection (disambiguation) */
+  async _handleActionSelect(actionId, optionEmail, optionName, msgEl) {
+    const card = msgEl.querySelector(`.action-card[data-action-id="${actionId}"]`);
+    const optionsList = card?.querySelector('.action-options-list');
+    if (optionsList) optionsList.innerHTML = '<span class="action-loading">Selecting...</span>';
+
+    try {
+      const resp = await fetch('/api/action/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId, selectedEmail: optionEmail, selectedName: optionName, sessionId: this.sessionId }),
+      });
+
+      const data = await resp.json();
+
+      if (resp.ok) {
+        // We completely re-render the card body because details have updated.
+        // It's simpler to just indicate success directly or add a message.
+        // For VoxFlow, we can just replace the parent's message entirely, but here we just update UI.
+        const parent = card.parentNode;
+        parent.removeChild(card);
+        // data.action has the updated action
+        const newCardHtml = this._renderActionCard(data.action);
+        parent.innerHTML = parent.innerHTML + newCardHtml;
+        this._bindActionButtons(parent, data.action);
+      } else {
+         if (optionsList) optionsList.innerHTML = `<span class="action-result error">⚠️ ${this._escapeHtml(data.error || 'Failed to select.')}</span>`;
+      }
+    } catch (err) {
+      console.error('[VoxFlow] Action select error:', err);
+      if (optionsList) optionsList.innerHTML = '<span class="action-result error">⚠️ Network error. Please try again.</span>';
+    }
+  }
+
   /** Handle action cancellation */
   async _handleActionCancel(actionId, msgEl) {
     const card = msgEl.querySelector(`.action-card[data-action-id="${actionId}"]`);
@@ -310,6 +377,45 @@ export class ConversationManager {
     } catch (err) {
       console.error('[VoxFlow] Action cancel error:', err);
       this._updateActionCard(card, 'error', 'Network error. Please try again.');
+    }
+  }
+
+  /** Handle action regeneration */
+  async _handleRegenerate(actionId, msgEl) {
+    const card = msgEl.querySelector(`.action-card[data-action-id="${actionId}"]`);
+    const btn = card?.querySelector('.regenerate');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '🔄 Regenerating...';
+    }
+
+    try {
+      const resp = await fetch('/api/action/regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId, sessionId: this.sessionId }),
+      });
+      const data = await resp.json();
+
+      if (resp.ok) {
+        // Find message-content wrapper
+        const parent = card.parentNode;
+        parent.removeChild(card);
+        const newCardHtml = this._renderActionCard(data.action);
+        parent.innerHTML = parent.innerHTML + newCardHtml;
+        this._bindActionButtons(parent, data.action);
+      } else {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '⚠️ Failed to regenerate';
+        }
+      }
+    } catch (err) {
+      console.error('[VoxFlow] Action regenerate failed:', err);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⚠️ Network error';
+      }
     }
   }
 
