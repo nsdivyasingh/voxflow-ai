@@ -1,151 +1,272 @@
 # VoxFlow
 
-Voice-first AI assistant with an **orchestrator backend**, **semantic retrieval** (Qdrant + Gemini embeddings), and **optional Vapi** for production voice. The web UI supports typed chat, browser speech, and Vapi calls—with replies shown in chat and spoken when appropriate.
+VoxFlow is a voice-first AI assistant web app with a multi-stage orchestrator, retrieval-backed answers, action confirmation workflows, and conversation memory.
 
-## What it does
+It combines:
+- a Vite frontend (typed + voice chat),
+- an Express backend (intent, routing, actions, memory),
+- an optional Python FastAPI retrieval service,
+- and Qdrant for vector-based knowledge and long-term memory.
 
-- **Chat UI** (Vite): messages, quick actions, optional debug pipeline trace.
-- **Orchestrator** (Express): intent detection, query classification (`KNOWLEDGE` / `ACTION` / `GENERAL`), tool routing, response generation.
-- **Retrieval**: tries **direct Qdrant** from Node (Gemini embeddings), then **Python FastAPI** (`/ask`) if needed, then **in-memory** fallback.
-- **LLM**: Google Gemini for generation when configured; template fallback when not.
-- **Voice**: Vapi (if keys set) or Web Speech API; Vapi final transcripts are sent through the same `/api/chat` flow so you get **text + voice**.
+## Core capabilities
+
+- Voice and text conversation in a single chat experience.
+- Intent-aware orchestration with query classes: `KNOWLEDGE`, `ACTION`, `GENERAL`.
+- Retrieval pipeline with graceful fallback:
+  1. Python retrieval API (`/ask`) when available,
+  2. direct Qdrant search from Node,
+  3. in-memory fallback knowledge base.
+- Action flow with explicit user confirmation before execution (reminders, email, schedule, notes, WhatsApp).
+- 3-tier memory system:
+  - short-term turn buffer,
+  - long-term summarized memory in Qdrant,
+  - extracted user entities/preferences in Qdrant.
+- Reminder scheduler with Server-Sent Events (SSE) for real-time browser notifications.
+- Optional debug trace to inspect orchestrator decisions in chat.
+
+## Architecture overview
+
+### Request flow (`/api/chat`)
+
+1. Record user turn in memory.
+2. Detect intent (`server/intentDetector.js`).
+3. Classify query type (`KNOWLEDGE` / `ACTION` / `GENERAL`).
+4. Recall memory context (if enabled and relevant).
+5. Route:
+   - `KNOWLEDGE` -> retrieval path,
+   - `ACTION` -> prepare action card (no execution yet),
+   - `GENERAL` -> direct response generation.
+6. Generate response (LLM when configured, fallback templates otherwise).
+7. Return SSE stream (`metadata`, `chunk`, `done`) to frontend.
+8. Post-response memory updates (assistant turn, summarization cadence, entity extraction).
 
 ## Tech stack
 
 | Layer | Stack |
-|--------|--------|
-| Frontend | Vite, vanilla JS (`src/`), CSS |
-| Backend | Node.js, Express, `dotenv`, `cors` |
-| Retrieval | `@qdrant/js-client-rest`, Python `fastapi` + `uvicorn`, `qdrant-client` |
-| AI | `@google/generative-ai` (Gemini chat + embeddings) |
-| Voice | `@vapi-ai/web`, browser `SpeechRecognition` + `SpeechSynthesis` |
+|---|---|
+| Frontend | Vite, Vanilla JS, CSS |
+| Backend | Node.js, Express, CORS, dotenv |
+| Retrieval (Node) | `@qdrant/js-client-rest`, Gemini embeddings |
+| Retrieval (Python) | FastAPI, Uvicorn, `qdrant-client`, requests |
+| LLM | Gemini (`@google/generative-ai`), optional OpenRouter/Groq |
+| Voice | `@vapi-ai/web`, browser SpeechRecognition + SpeechSynthesis |
+| Email action | Nodemailer (SMTP) |
 
-## Repository layout
+## Project structure
 
-```
-src/           Web app (UI, conversation, voice helpers)
-server/        Express API, orchestrator, retriever, intent, actions
-qdrant/        FastAPI app (e.g. /ask), Qdrant helpers, mock data
-public/        Static assets
+```text
+voxflow-ai/
+  src/                    Frontend app (UI, voice, chat manager)
+    actions/              Client-side action parsing/execution helpers
+    utils/
+  server/                 Express API + orchestrator + tools
+    orchestrator.js       Core decision pipeline
+    retriever.js          Retrieval orchestration and fallbacks
+    memoryLayer.js        Short/long/entity memory logic
+    actionExecutor.js     Action preparation and confirmed execution
+    reminderStore.js      Reminder scheduler + SSE event emitter
+  qdrant/                 Python FastAPI retrieval service
+    main.py               /ask endpoint
+    qdrant_service.py     Qdrant query helpers
+  public/                 Static assets
+  requiremnets.txt        Python dependencies (filename kept as-is)
+  README.md
 ```
 
 ## Prerequisites
 
-- **Node.js** 18+
-- **Python** 3.10+ (for the `qdrant` service when using `npm run dev`)
-- Accounts / keys as needed:
-  - [Google AI Studio](https://aistudio.google.com/apikey) — Gemini
-  - [Qdrant Cloud](https://cloud.qdrant.io/) (or compatible cluster)
-  - [Vapi](https://vapi.ai/) — optional voice
+- Node.js 18+
+- Python 3.10+
+- Qdrant instance (cloud or self-hosted) for full retrieval + memory features
+- API keys depending on selected providers
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill values:
+This repository currently includes a `.env` file locally. For team-safe setup, create your own `.env` from the template below and do not commit secrets.
 
-| Variable | Purpose |
-|----------|---------|
-| `LLM_PROVIDER` | `gemini` (default) |
-| `GEMINI_API_KEY` | Gemini API key (chat + embeddings for direct Qdrant) |
-| `OPENAI_API_KEY` | Optional alternative provider |
-| `VAPI_PUBLIC_KEY`, `VAPI_ASSISTANT_ID` | Enable Vapi voice in the UI |
-| `QDRANT_URL`, `QDRANT_API_KEY` | Qdrant HTTP endpoint and API key |
-| `QDRANT_COLLECTION` | Collection name (default: `voxflow-kb`) |
-| `PYTHON_QDRANT_URL` | Python FastAPI base URL (default: `http://127.0.0.1:8001`) |
-| `DEBUG_MODE` | `true` to include pipeline debug in chat responses |
+```env
+# Core provider selection
+LLM_PROVIDER=gemini
 
-## Install and run (development)
+# LLM keys
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+OPENROUTER_API_KEY=
+GROQ_API_KEY=
 
-From the repo root:
+# Voice (optional Vapi)
+VAPI_PUBLIC_KEY=
+VAPI_ASSISTANT_ID=
+
+# Qdrant / retrieval
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION=voxflow-kb
+PYTHON_QDRANT_URL=http://127.0.0.1:8001
+
+# Debug
+DEBUG_MODE=false
+
+# Email action (optional)
+SMTP_USER=
+SMTP_PASS=
+```
+
+### Variable notes
+
+- `GEMINI_API_KEY` is used for response generation, embeddings, and memory extraction when Gemini is active.
+- `OPENROUTER_API_KEY` / `GROQ_API_KEY` enable alternate generation routes.
+- `QDRANT_URL` + `QDRANT_API_KEY` are required for direct vector retrieval and persistent memory collections.
+- `PYTHON_QDRANT_URL` enables Python `/ask` retrieval route (default `http://127.0.0.1:8001`).
+- `VAPI_*` controls whether frontend uses Vapi voice vs browser Web Speech fallback.
+- `SMTP_*` enables real email sending on approved email actions.
+
+## Local development
+
+Install JavaScript dependencies:
 
 ```bash
 npm install
+```
+
+Install Python dependencies:
+
+```bash
+pip install -r requiremnets.txt
+```
+
+Run all services:
+
+```bash
 npm run dev
 ```
 
-This runs (via `concurrently`):
+### What `npm run dev` starts
 
-| Service | Port | Role |
-|---------|------|------|
-| Vite | **5173** | Frontend — proxies `/api` to Express |
-| Express | **3001** | REST API + orchestrator |
-| Uvicorn | **8001** | Python FastAPI (`cd qdrant && uvicorn main:app`) |
+| Service | Port | Purpose |
+|---|---|---|
+| Vite frontend | `5173` | UI + `/api` proxy to backend |
+| Express backend | `3001` | Orchestrator API |
+| FastAPI retrieval | `8001` | Python `/ask` retrieval endpoint |
 
-Open **http://localhost:5173**.
+Open [http://localhost:5173](http://localhost:5173).
 
-### Windows note
-
-`dev:clean` uses `kill-port` on ports `3001`, `5173`, `5174`, `8001` before start.
-
-### Python dependencies (qdrant service)
-
-Install what you need for `qdrant/main.py` (see `requiremnets.txt`):
-
-```bash
-cd qdrant
-pip install -r ../requiremnets.txt
-# Optional extras used by some flows:
-pip install sentence-transformers
-```
-
-## NPM scripts
+### Script reference
 
 | Script | Description |
-|--------|-------------|
-| `npm run dev` | Clean ports, then frontend + backend + Python API together |
-| `npm run dev:frontend` | Vite only |
-| `npm run dev:backend` | Nodemon + `server/index.js` |
-| `npm run dev:python` | Uvicorn on port 8001 |
-| `npm run build` | Production build of the frontend |
+|---|---|
+| `npm run dev` | Clean ports and start frontend + backend + python |
+| `npm run dev:clean` | Kill ports `3001`, `5173`, `5174`, `8001` |
+| `npm run dev:frontend` | Start Vite |
+| `npm run dev:backend` | Start Express with nodemon |
+| `npm run dev:python` | Start FastAPI via local `.venv` Python |
+| `npm run build` | Build frontend to `dist/` |
 | `npm run preview` | Preview production build |
 
-## Seeding Qdrant (optional)
+Note: `dev:python` currently uses a Windows path to `.venv` Python in `package.json`.
 
-Populates the configured collection with Gemini embeddings (see `server/seedQdrant.js`):
+## API reference
+
+Base URL (dev backend): `http://localhost:3001`
+
+### Chat and config
+
+- `POST /api/chat`
+  - Body: `{ message, history?, sessionId?, debug? }`
+  - Returns SSE stream with:
+    - `event: metadata`,
+    - `event: chunk`,
+    - `event: done`.
+- `GET /api/config`
+  - Returns public frontend config (for example, whether Vapi is enabled).
+
+### Actions
+
+- `POST /api/action/confirm`
+- `POST /api/action/cancel`
+
+Actions are prepared first and executed only after confirmation.
+
+### Reminders and memory
+
+- `GET /api/reminders/events` (SSE stream for fired reminders)
+- `GET /api/reminders?sessionId=...`
+- `DELETE /api/memory/:sessionId`
+
+### Health
+
+- `GET /api/health`
+- `GET /api/health/retrieval`
+- `GET /api/health/memory`
+
+### Python retrieval service
+
+- `GET http://127.0.0.1:8001/ask?q=<query>`
+
+## Retrieval behavior
+
+Current retrieval strategy in `server/retriever.js`:
+
+1. Try Python backend first (`PYTHON_QDRANT_URL`).
+2. If unavailable, try direct Qdrant from Node (Gemini embedding + Qdrant search).
+3. If still unavailable, use in-memory keyword-scored fallback entries.
+
+Use `GET /api/health/retrieval` to inspect active path and last errors.
+
+## Memory system details
+
+Implemented in `server/memoryLayer.js`:
+
+- **Short-term memory**: in-process rolling buffer per session.
+- **Long-term memory**: periodic conversation summaries embedded and stored in `voxflow-memory`.
+- **Entity memory**: extracted personal facts/preferences stored in `voxflow-entities`.
+- **Recall**: semantic lookup across summaries and entities, injected into response generation.
+
+If Qdrant or Gemini keys are missing, memory features degrade gracefully.
+
+## Voice behavior
+
+- If `VAPI_PUBLIC_KEY` + `VAPI_ASSISTANT_ID` are set, frontend uses Vapi call mode.
+- Otherwise it falls back to browser Web Speech APIs.
+- Typed queries still receive TTS output (when available).
+- Reminder events can trigger browser notifications and spoken reminders.
+
+## Optional: seed Qdrant knowledge
 
 ```bash
 node server/seedQdrant.js
 ```
 
-Requires `QDRANT_URL`, `QDRANT_API_KEY`, `GEMINI_API_KEY`, and optionally `QDRANT_COLLECTION`.
+Requires: `QDRANT_URL`, `QDRANT_API_KEY`, `GEMINI_API_KEY`.
 
-## API overview
+## Build and deploy notes
 
-Base URL in dev: **http://localhost:3001** (browser uses Vite proxy: `/api` → 3001).
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Main chat: `{ message, history?, sessionId?, debug? }` |
-| `GET` | `/api/config` | Public config (e.g. Vapi enabled + ids) |
-| `GET` | `/api/health` | Service health + retrieval snapshot |
-| `GET` | `/api/health/retrieval` | Retrieval path: `direct_qdrant`, `python_backend`, or `in_memory` |
-| `POST` | `/api/action/confirm` | Confirm pending action |
-| `POST` | `/api/action/cancel` | Cancel pending action |
-
-Python service (when running): `GET http://127.0.0.1:8001/ask?q=...`
-
-## Retrieval behavior (high level)
-
-1. **Direct Qdrant (Node)** — embed query with Gemini, search `QDRANT_COLLECTION`.
-2. **Python `/ask`** — if direct path fails or is unavailable; returns structured `context` / `answer` / `insights`.
-3. **In-memory** — keyword-style fallback in `server/retriever.js`.
-
-Check **`GET /api/health/retrieval`** to see which path last succeeded and whether the Python backend is reachable.
-
-## Production build
+Build frontend:
 
 ```bash
 npm run build
 ```
 
-Serve the `dist/` output with any static host. You still need the Express API (or equivalent) and env vars for LLM, Qdrant, and voice as you configure them.
+Deploy `dist/` on a static host, and run backend services separately:
+- Express API (`server/index.js`)
+- optional Python retrieval service (`qdrant/main.py`)
+- configured env vars for LLM, Qdrant, voice, and email actions
 
 ## Troubleshooting
 
-- **No Qdrant / wrong answers**: Verify `.env`, run `/api/health/retrieval`, ensure Python API is up if you rely on fallback.
-- **Gemini errors (quota, leaked key)**: Rotate `GEMINI_API_KEY` in Google AI Studio; check billing/quotas.
-- **Vapi vs browser voice**: If Vapi keys are missing, the app uses Web Speech API.
-- **CORS**: Dev uses Vite proxy; for custom setups, align origins with your API.
+- `GET /api/health` fails: confirm backend is running on `3001`.
+- Empty/weak knowledge responses: check `GET /api/health/retrieval` and Python service reachability.
+- Memory not used: verify Qdrant + Gemini env vars and `GET /api/health/memory`.
+- No voice input: browser may not support SpeechRecognition, or microphone permission is denied.
+- Vapi not active: verify `VAPI_PUBLIC_KEY` and `VAPI_ASSISTANT_ID`.
+- Email confirmation succeeds but mail not sent: verify `SMTP_USER`/`SMTP_PASS` and provider app-password settings.
+
+## Security checklist
+
+- Never commit `.env` files with real keys.
+- Rotate any API keys exposed in local history or screenshots.
+- Keep production keys in a secret manager (not in source control).
 
 ## License
 
-Private project — see repository owner for licensing.
+Private project. Contact repository owner for usage terms.
