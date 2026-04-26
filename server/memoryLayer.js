@@ -33,6 +33,9 @@ const shortTermBuffers = new Map();
 // Turn counters for periodic summarization: sessionId → number
 const turnCounters = new Map();
 
+// User preferences: sessionId → { topic: score }
+const userPreferences = new Map();
+
 // ══════════════════════════════════════════════════════════════
 // ── Initialization ───────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
@@ -542,6 +545,66 @@ export async function getMemoryHealth() {
     activeBuffers: shortTermBuffers.size,
     checkedAt: new Date().toISOString(),
   };
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── User Preferences ────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Update user preferences based on message content.
+ * @param {string} sessionId
+ * @param {string} message
+ */
+export function updatePreferences(sessionId, message) {
+  if (!userPreferences.has(sessionId)) {
+    userPreferences.set(sessionId, {});
+  }
+  const prefs = userPreferences.get(sessionId);
+
+  // Simple keyword-based preference tracking
+  const positiveWords = ['like', 'love', 'favorite', 'prefer', 'good', 'great', 'awesome'];
+  const negativeWords = ['dislike', 'hate', 'bad', 'terrible', 'awful'];
+
+  const lowerMsg = message.toLowerCase();
+  for (const word of positiveWords) {
+    if (lowerMsg.includes(word)) {
+      // Extract topic after the word
+      const parts = lowerMsg.split(word);
+      if (parts[1]) {
+        const topic = parts[1].trim().split(' ')[0];
+        prefs[topic] = (prefs[topic] || 0) + 1;
+      }
+    }
+  }
+  for (const word of negativeWords) {
+    if (lowerMsg.includes(word)) {
+      const parts = lowerMsg.split(word);
+      if (parts[1]) {
+        const topic = parts[1].trim().split(' ')[0];
+        prefs[topic] = (prefs[topic] || 0) - 1;
+      }
+    }
+  }
+}
+
+/**
+ * Get user preferences as a string for LLM prompt.
+ * @param {string} sessionId
+ * @returns {string}
+ */
+export function getPreferencesContext(sessionId) {
+  const prefs = userPreferences.get(sessionId);
+  if (!prefs || Object.keys(prefs).length === 0) return '';
+
+  const positive = Object.entries(prefs).filter(([k, v]) => v > 0).map(([k, v]) => `${k} (+${v})`);
+  const negative = Object.entries(prefs).filter(([k, v]) => v < 0).map(([k, v]) => `${k} (${v})`);
+
+  let context = '';
+  if (positive.length > 0) context += `User likes: ${positive.join(', ')}. `;
+  if (negative.length > 0) context += `User dislikes: ${negative.join(', ')}. `;
+
+  return context.trim();
 }
 
 // ══════════════════════════════════════════════════════════════

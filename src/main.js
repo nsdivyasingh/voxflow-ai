@@ -293,6 +293,91 @@ clearMemoryBtn.addEventListener('click', async () => {
 // ── Reminder Notifications ──
 
 /**
+ * Stop the currently playing reminder alarm.
+ */
+function stopReminderAlarm() {
+  if (!window.reminderAlarm) return;
+  try {
+    window.reminderAlarm.gainNode.gain.cancelScheduledValues(window.reminderAlarm.audioContext.currentTime);
+    window.reminderAlarm.gainNode.gain.setTargetAtTime(0, window.reminderAlarm.audioContext.currentTime, 0.02);
+    window.reminderAlarm.oscillator.stop();
+  } catch (err) {
+    // ignore already stopped audio
+  }
+  try {
+    window.reminderAlarm.audioContext.close();
+  } catch (err) {
+    // ignore closing errors
+  }
+  clearTimeout(window.reminderAlarm.timeoutId);
+  window.reminderAlarm = null;
+}
+
+/**
+ * Create a richer alarm sound for reminders.
+ */
+function playReminderSound() {
+  try {
+    stopReminderAlarm();
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const carrier = audioContext.createOscillator();
+    const carrierGain = audioContext.createGain();
+    const modulator = audioContext.createOscillator();
+    const modGain = audioContext.createGain();
+    const filter = audioContext.createBiquadFilter();
+
+    carrier.type = 'triangle';
+    carrier.frequency.value = 580;
+
+    modulator.type = 'sine';
+    modulator.frequency.value = 6;
+    modGain.gain.value = 40;
+
+    carrier.connect(carrierGain);
+    modulator.connect(modGain);
+    modGain.connect(carrier.frequency);
+
+    carrierGain.connect(filter);
+    filter.connect(audioContext.destination);
+
+    filter.type = 'lowpass';
+    filter.frequency.value = 1600;
+    filter.Q.value = 1;
+
+    const attack = audioContext.currentTime;
+    carrierGain.gain.setValueAtTime(0.001, attack);
+    carrierGain.gain.linearRampToValueAtTime(0.25, attack + 0.15);
+
+    carrier.start(attack);
+    modulator.start(attack);
+
+    const stopTime = attack + 60;
+    carrierGain.gain.setTargetAtTime(0.001, stopTime - 0.2, 0.02);
+    carrier.stop(stopTime);
+    modulator.stop(stopTime);
+
+    const timeoutId = setTimeout(() => {
+      stopReminderAlarm();
+    }, 60000);
+
+    window.reminderAlarm = {
+      audioContext,
+      carrier,
+      modulator,
+      carrierGain,
+      filter,
+      timeoutId,
+    };
+  } catch (err) {
+    console.warn('[VoxFlow] Could not play reminder sound:', err);
+  }
+}
+
+window.reminderMuted = false;
+window.stopReminderAlarm = stopReminderAlarm;
+
+/**
  * Connect to the server's SSE stream for real-time reminder alerts.
  * When a reminder fires, show a browser notification + in-chat message.
  */
@@ -304,51 +389,207 @@ function initReminderListener() {
     });
   }
 
-  // Connect to SSE stream
-  const evtSource = new EventSource('/api/reminders/events');
+  let evtSource = null;
 
-  evtSource.addEventListener('reminder', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      console.log('[VoxFlow] 🔔 Reminder fired:', data);
+  function connectSSE() {
+    if (evtSource) evtSource.close();
+    evtSource = new EventSource('/api/reminders/events');
 
-      // Show browser notification
-      if ('Notification' in window && Notification.permission === 'granted') {
-        const notif = new Notification('🔔 VoxFlow Reminder', {
-          body: data.what,
-          icon: '/logo.jpeg',
-          tag: data.id,
-          requireInteraction: true,
+    evtSource.addEventListener('reminder', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        console.log('[VoxFlow] 🔔 Reminder fired:', data);
+
+        // Stop any previous alarm and play the new one if not muted
+        stopReminderAlarm();
+        if (!window.reminderMuted) {
+          playReminderSound();
+        }
+
+        const reminderText = data.title || data.what || 'Reminder';
+        const notificationBody = data.title && data.what && data.title !== data.what
+          ? `${data.title} — ${data.what}`
+          : reminderText;
+
+        // Show browser notification
+        if ('Notification' in window && Notification.permission === 'granted') {
+          const notif = new Notification('🔔 VoxFlow Reminder', {
+            body: notificationBody,
+            icon: '/logo.jpeg',
+            tag: data.id,
+            requireInteraction: true,
+            renotify: true,
+          });
+          notif.onclick = () => {
+            window.focus();
+            notif.close();
+          };
+        }
+
+        // Show in-chat notification with buttons
+        conversation._renderMessage('assistant', `🔔 **Reminder:** ${reminderText}`, {
+          toolUsed: 'api',
+          queryType: 'ACTION',
+          sources: ['Reminder System'],
+          isReminder: true,
+          reminderId: data.id,
         });
-        notif.onclick = () => {
-          window.focus();
-          notif.close();
-        };
-      }
 
-      // Show in-chat notification
-      conversation._renderMessage('assistant', `🔔 **Reminder:** ${data.what}`, {
-        toolUsed: 'api',
-        queryType: 'ACTION',
-        sources: ['Reminder System'],
-      });
-
-      // Speak the reminder aloud
-      if (tts) {
-        tts.speak(`Reminder: ${data.what}`);
+        // Speak the reminder aloud if not muted
+        if (tts && !window.reminderMuted) {
+          tts.speak(`Reminder: ${reminderText}`);
+        }
+        // Refresh right panel lists so UI updates immediately
+        try { refreshRightPanel(); } catch (e) { /* ignore if not initialized */ }
+      } catch (err) {
+        console.error('[VoxFlow] Reminder parse error:', err);
       }
-    } catch (err) {
-      console.error('[VoxFlow] Reminder parse error:', err);
+    });
+
+    evtSource.onerror = () => {
+      console.warn('[VoxFlow] Reminder SSE connection lost, will reconnect in 5s...');
+      setTimeout(connectSSE, 5000);
+    };
+
+    evtSource.addEventListener('heartbeat', () => {
+      // Keep alive
+    });
+  }
+
+  connectSSE();
+}
+
+// ── Right Panel (Reminders & Calendar) ──
+async function fetchRemindersList() {
+  try {
+    const sessionId = conversation?.sessionId || 'default';
+    const res = await fetch(`/api/reminders?sessionId=${encodeURIComponent(sessionId)}`);
+    if (!res.ok) throw new Error('Failed to fetch reminders');
+    const payload = await res.json();
+    return Array.isArray(payload?.reminders) ? payload.reminders : [];
+  } catch (err) {
+    console.warn('[VoxFlow] fetchRemindersList error:', err);
+    return [];
+  }
+}
+
+async function fetchUpcomingEvents() {
+  try {
+    const res = await fetch('/api/calendar/upcoming');
+    // Calendar integration is optional; avoid noisy errors when endpoint is unavailable.
+    if (!res.ok) return [];
+    const payload = await res.json();
+    if (Array.isArray(payload)) return payload;
+    return Array.isArray(payload?.events) ? payload.events : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function renderRemindersList(items) {
+  const container = document.getElementById('remindersList');
+  if (!container) return;
+  container.innerHTML = '';
+  if (!items.length) {
+    container.innerHTML = '<p class="empty-state">No active reminders</p>';
+    return;
+  }
+
+  items.forEach(r => {
+    const el = document.createElement('div');
+    el.className = 'reminder-item';
+    el.innerHTML = `<div>
+        <div class="meta">${r.when ? new Date(r.when).toLocaleString() : ''}</div>
+        <div class="title">${(r.title || r.what || 'Reminder')}</div>
+      </div>
+      <div class="actions">
+        <button class="tiny-btn" data-id="${r.id}" data-action="dismiss">Dismiss</button>
+      </div>`;
+    container.appendChild(el);
+  });
+}
+
+function renderEventsList(items) {
+  const container = document.getElementById('calendarList');
+  if (!container) return;
+  container.innerHTML = '';
+  if (!items.length) {
+    container.innerHTML = '<p class="empty-state">No upcoming events</p>';
+    return;
+  }
+
+  items.forEach(ev => {
+    const el = document.createElement('div');
+    el.className = 'event-item';
+    el.innerHTML = `<div>
+        <div class="meta">${ev.start ? new Date(ev.start).toLocaleString() : ''}</div>
+        <div class="title">${ev.summary || ev.title || 'Event'}</div>
+      </div>`;
+    container.appendChild(el);
+  });
+}
+
+function wireRightPanelTabs() {
+  const tabs = document.querySelectorAll('.panel-tab');
+  tabs.forEach(t => t.addEventListener('click', (e) => {
+    const target = e.currentTarget.dataset.tab;
+    document.querySelectorAll('.panel-tab').forEach(x => x.classList.toggle('active', x.dataset.tab === target));
+    document.querySelectorAll('.panel-content').forEach(c => c.classList.toggle('active', c.id === `${target}Tab`));
+  }));
+
+  // Dismiss button handler (delegated)
+  document.getElementById('remindersList')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    if (action === 'dismiss' && id) {
+      try {
+        await fetch(`/api/reminders/${id}/cancel`, { method: 'POST' });
+      } catch (err) { /* ignore */ }
+      // Refresh lists
+      await refreshRightPanel();
     }
   });
-
-  evtSource.onerror = () => {
-    console.warn('[VoxFlow] Reminder SSE connection lost, will reconnect...');
-  };
 }
+
+async function refreshRightPanel() {
+  const [reminders, events] = await Promise.all([fetchRemindersList(), fetchUpcomingEvents()]);
+  renderRemindersList(reminders);
+  renderEventsList(events);
+  // update sidebar metrics
+  const remCount = document.getElementById('reminderCount');
+  const evCount = document.getElementById('eventCount');
+  if (remCount) remCount.textContent = String(reminders.length || 0);
+  if (evCount) evCount.textContent = String(events.length || 0);
+}
+
+function initRightPanel() {
+  wireRightPanelTabs();
+  // initial load
+  refreshRightPanel();
+  // refresh periodically in case SSE misses (30s)
+  setInterval(refreshRightPanel, 30000);
+}
+
+// ── Offline Mode Handling ──
+function handleOnlineStatus() {
+  const isOnline = navigator.onLine;
+  if (!isOnline) {
+    setStatus('error', 'Offline - Limited functionality');
+    conversation.addMessage('system', 'You are currently offline. Some features may not work.');
+  } else {
+    setStatus('ready', 'Online');
+  }
+}
+
+window.addEventListener('online', handleOnlineStatus);
+window.addEventListener('offline', handleOnlineStatus);
 
 // ── Initialization ──
 setStatus('ready', 'Ready');
 initVoice();
 initReminderListener();
+handleOnlineStatus();
+initRightPanel();
 console.log('[VoxFlow] Application initialized.');

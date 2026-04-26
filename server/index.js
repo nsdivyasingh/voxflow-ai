@@ -21,8 +21,9 @@ import {
   cancelPendingAction,
 } from './sessionStore.js';
 import { executeConfirmedAction } from './actionExecutor.js';
-import { onReminderFired, getReminders } from './reminderStore.js';
-import { getRecentEmails, analyzeEmailsForPerson } from './emailInsights.js';
+import { onReminderFired, getReminders, cancelReminder } from './reminderStore.js';
+import { getRecentEmails, analyzeEmailsForPerson, syncEmails } from './emailInsights.js';
+import { initCalendar, addCalendarEvent, getUpcomingEvents } from './calendarSync.js';
 
 const app = express();
 const PORT = 3001;
@@ -45,6 +46,7 @@ try {
 await initLLM();
 await initQdrant();
 await initMemory();
+await initCalendar();
 
 
 // ══════════════════════════════════════════════════════════════
@@ -251,6 +253,20 @@ app.get('/api/reminders', (req, res) => {
   res.json({ reminders });
 });
 
+app.post('/api/reminders/:id/cancel', (req, res) => {
+  const reminderId = req.params.id;
+  if (!reminderId) {
+    return res.status(400).json({ error: 'Missing reminder id.' });
+  }
+
+  const cancelled = cancelReminder(reminderId);
+  if (!cancelled) {
+    return res.status(404).json({ error: 'Reminder not found.' });
+  }
+
+  return res.json({ status: 'cancelled', reminder: cancelled });
+});
+
 // ══════════════════════════════════════════════════════════════
 // ── Email Insights Endpoints ─────────────────────────────────
 // ══════════════════════════════════════════════════════════════
@@ -294,6 +310,48 @@ app.get('/api/email/person-summary', async (req, res) => {
   }
 });
 
+
+// ══════════════════════════════════════════════════════════════
+// ── POST /api/calendar/add — Add Event to Calendar ──────────
+// ══════════════════════════════════════════════════════════════
+
+app.post('/api/calendar/add', async (req, res) => {
+  try {
+    const { summary, startTime, endTime, description } = req.body;
+    const event = await addCalendarEvent(summary, new Date(startTime), new Date(endTime), description);
+    res.json({ event });
+  } catch (err) {
+    console.error('[VoxFlow] Calendar add failed:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to add calendar event.' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── GET /api/calendar/upcoming — Get Upcoming Events ────────
+// ══════════════════════════════════════════════════════════════
+
+app.get('/api/calendar/upcoming', async (req, res) => {
+  try {
+    const events = await getUpcomingEvents();
+    res.json({ events });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── POST /api/email/sync — Sync Emails ──────────────────────
+// ══════════════════════════════════════════════════════════════
+
+app.post('/api/email/sync', async (req, res) => {
+  try {
+    const { days, limit } = req.body;
+    const emails = await syncEmails({ days, limit });
+    res.json({ synced: emails.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 app.get('/api/health', async (req, res) => {

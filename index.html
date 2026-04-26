@@ -21,97 +21,165 @@
       <div class="ambient-orb orb-1"></div>
       <div class="ambient-orb orb-2"></div>
       <div class="ambient-orb orb-3"></div>
+      <div class="agent-orb agent-1"></div>
+      <div class="agent-orb agent-2"></div>
+      <div class="agent-orb agent-3"></div>
     </div>
 
-    <!-- Header -->
-    <header id="app-header">
-      <div class="header-brand">
-        <img class="brand-icon" src="/logo.jpeg" alt="VoxFlow Logo" />
-        <h1 class="brand-name">VoxFlow</h1>
-      </div>
-      <div class="header-controls">
-        <button id="clearMemoryBtn" class="clear-memory-btn" title="Clear conversation memory">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-            <path d="M3 6h18"/>
-            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-          </svg>
-          <span>Clear Memory</span>
-        </button>
-        <div class="debug-toggle" id="debugToggle" title="Toggle pipeline debug view">
-          <span class="debug-toggle-label">Debug</span>
-          <div class="debug-switch"></div>
-        </div>
-        <div class="header-status">
-          <span class="status-dot" id="statusDot"></span>
-          <span class="status-text" id="statusText">Ready</span>
-        </div>
-      </div>
-    </header>
-
-    <!-- Main Chat Area -->
-    <main id="chatArea">
-      <div id="chatMessages" class="chat-messages">
-        <!-- Welcome message -->
-        <div class="message assistant-message welcome-message" id="welcomeMessage">
-          <div class="message-avatar">
-            <img src="/logo.jpeg" alt="VoxFlow" class="avatar-logo" />
+    <aside id="sidebar">
+      <div class="sidebar-panel">
+        <div class="sidebar-brand">
+          <img class="sidebar-logo" src="/logo.jpeg" alt="VoxFlow Logo" />
+          <div>
+            <p class="sidebar-title">VoxFlow Studio</p>
+            <p class="sidebar-subtitle">Control center</p>
           </div>
-          <div class="message-content">
-            <p class="message-greeting">Hey there! 👋</p>
-            <p>I'm <strong>VoxFlow</strong>, your voice-first AI assistant. Tap the mic and start talking, or type
-              below.</p>
-            <div class="quick-actions">
-              <button class="quick-action-btn" data-query="What can you do?">What can you do?</button>
-              <button class="quick-action-btn" data-query="Set a reminder">Set a reminder</button>
-              <button class="quick-action-btn" data-query="Search for something">Search for something</button>
+        </div>
+
+        <div class="sidebar-status-card">
+          <div>
+            <span class="sidebar-label">Status</span>
+            <strong id="sidebarStatus">Ready</strong>
+          </div>
+          <span class="status-badge status-ready">Live</span>
+        </div>
+
+        <div class="sidebar-metrics">
+          <div class="metric-card">
+            <span>Reminders</span>
+            <strong id="reminderCount">0</strong>
+          </div>
+          <div class="metric-card">
+            <span>Events</span>
+            <strong id="eventCount">0</strong>
+          </div>
+        </div>
+
+        <div class="sidebar-actions">
+          <button class="sidebar-action-btn" data-query="Set a reminder">📌 Set reminder</button>
+          <button class="sidebar-action-btn" data-query="Add an event to my calendar">📅 Add event</button>
+          <button class="sidebar-action-btn" data-query="Check my email">📧 Sync email</button>
+        </div>
+      </div>
+    </aside>
+
+    <section id="workspace">
+      <div class="workspace-main">
+        <!-- Dashboard Header -->
+        <header id="app-header">
+        <div class="header-brand">
+          <img class="brand-icon" src="/logo.jpeg" alt="VoxFlow Logo" />
+          <div>
+            <h1 class="brand-name">VoxFlow</h1>
+            <p class="header-subtitle">Smarter voice assistant, now with workspace controls.</p>
+          </div>
+        </div>
+        <div class="header-controls">
+          <button id="clearMemoryBtn" class="clear-memory-btn" title="Clear conversation memory">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <path d="M3 6h18"/>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+            </svg>
+            <span>Clear Memory</span>
+          </button>
+          <div class="debug-toggle" id="debugToggle" title="Toggle pipeline debug view">
+            <span class="debug-toggle-label">Debug</span>
+            <div class="debug-switch"></div>
+          </div>
+          <div class="header-status">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-text" id="statusText">Ready</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Chat Area -->
+      <main id="chatArea">
+        <div id="chatMessages" class="chat-messages">
+          <!-- Welcome message -->
+          <div class="message assistant-message welcome-message" id="welcomeMessage">
+            <div class="message-avatar">
+              <img src="/logo.jpeg" alt="VoxFlow" class="avatar-logo" />
+            </div>
+            <div class="message-content">
+              <p class="message-greeting">Hey there! 👋</p>
+              <p>I'm <strong>VoxFlow</strong>, your voice-first AI assistant. Tap the mic and start talking, or type
+                below.</p>
+              <div class="quick-actions">
+                <button class="quick-action-btn" data-query="What can you do?">What can you do?</button>
+                <button class="quick-action-btn" data-query="Set a reminder">Set a reminder</button>
+                <button class="quick-action-btn" data-query="Search for something">Search for something</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </main>
+      </main>
 
-    <!-- Input Area -->
-    <footer id="inputArea">
-      <div class="input-container">
-        <!-- Mic Button -->
-        <button id="micBtn" class="mic-btn" aria-label="Start voice input" title="Tap to speak">
-          <div class="mic-pulse-ring"></div>
-          <div class="mic-pulse-ring ring-2"></div>
-          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
-          <svg class="mic-stop-icon hidden" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-        </button>
-
-        <!-- Text Input -->
-        <div class="text-input-wrapper">
-          <input type="text" id="textInput" class="text-input" placeholder="Type a message or tap the mic..."
-            autocomplete="off" />
-          <button id="sendBtn" class="send-btn" aria-label="Send message" title="Send">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-              stroke-linejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+      <footer id="inputArea">
+        <div class="input-container">
+          <!-- Mic Button -->
+          <button id="micBtn" class="mic-btn" aria-label="Start voice input" title="Tap to speak">
+            <div class="mic-pulse-ring"></div>
+            <div class="mic-pulse-ring ring-2"></div>
+            <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+            <svg class="mic-stop-icon hidden" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
             </svg>
           </button>
+
+          <!-- Text Input -->
+          <div class="text-input-wrapper">
+            <input type="text" id="textInput" class="text-input" placeholder="Type a message or tap the mic..."
+              autocomplete="off" />
+            <button id="sendBtn" class="send-btn" aria-label="Send message" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Live Transcript -->
+        <div id="liveTranscript" class="live-transcript hidden">
+          <div class="transcript-wave">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <p id="transcriptText" class="transcript-text">Listening...</p>
+        </div>
+      </footer>
+      </div>
+    </section>
+
+    <!-- Right Panel: Live Updates -->
+    <aside id="rightPanel" class="right-panel">
+      <div class="panel-tabs">
+        <button class="panel-tab active" data-tab="reminders">Reminders</button>
+        <button class="panel-tab" data-tab="calendar">Calendar</button>
+      </div>
+
+      <!-- Reminders Tab -->
+      <div id="remindersTab" class="panel-content active">
+        <div id="remindersList" class="live-list">
+          <p class="empty-state">No active reminders</p>
         </div>
       </div>
 
-      <!-- Live Transcript -->
-      <div id="liveTranscript" class="live-transcript hidden">
-        <div class="transcript-wave">
-          <span></span><span></span><span></span><span></span><span></span>
+      <!-- Calendar Tab -->
+      <div id="calendarTab" class="panel-content">
+        <div id="calendarList" class="live-list">
+          <p class="empty-state">No upcoming events</p>
         </div>
-        <p id="transcriptText" class="transcript-text">Listening...</p>
       </div>
-    </footer>
+    </aside>
   </div>
 
   <script type="module" src="/src/main.js"></script>

@@ -245,3 +245,15 @@ export async function analyzeEmailsForPerson({ personEmail, days = 30, limit = 1
   };
 }
 
+/**
+ * Sync recent emails for offline access or caching.
+ * @param {number} days
+ * @param {number} limit
+ */
+export async function syncEmails({ days = 7, limit = 50 }) {
+  const emails = await fetchEmailsInternal({ days, limit });
+  // For now, just return; in future, store in local DB or memory
+  console.log(`[VoxFlow] Synced ${emails.length} emails`);
+  return emails;
+}
+

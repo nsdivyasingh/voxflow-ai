@@ -195,6 +195,7 @@ export class ConversationManager {
       const badgeHtml = this._renderToolBadge(meta.toolUsed, meta.queryType);
       const sourcesHtml = this._renderSources(meta.sources);
       const actionHtml = meta.action ? this._renderActionCard(meta.action) : '';
+      const reminderHtml = meta.isReminder ? this._renderReminderButtons(meta.reminderId) : '';
       const debugHtml = this._renderDebugPanel(meta.debug);
 
       msgEl.innerHTML = `
@@ -205,6 +206,7 @@ export class ConversationManager {
           ${badgeHtml}
           <p class="chat-text">${this._escapeHtml(text)}</p>
           ${actionHtml}
+          ${reminderHtml}
           ${sourcesHtml}
           ${debugHtml}
         </div>
@@ -212,6 +214,9 @@ export class ConversationManager {
 
       if (meta.action) {
         setTimeout(() => this._bindActionButtons(msgEl, meta.action), 0);
+      }
+      if (meta.isReminder) {
+        setTimeout(() => this._bindReminderButtons(msgEl, meta.reminderId), 0);
       }
     } else {
       msgEl.innerHTML = `
@@ -308,6 +313,30 @@ export class ConversationManager {
     `;
   }
 
+  /** Render reminder buttons */
+  _renderReminderButtons(reminderId) {
+    return `
+      <div class="reminder-btns" data-reminder-id="${reminderId}">
+        <button class="reminder-btn stop-alarm" data-action="stop" data-reminder-id="${reminderId}">⏹️ Stop Alarm</button>
+        <button class="reminder-btn reschedule" data-action="reschedule" data-reminder-id="${reminderId}">🔄 Reschedule</button>
+        <button class="reminder-btn mute" data-action="mute" data-reminder-id="${reminderId}">🔇 Mute</button>
+        <button class="reminder-btn settings" data-action="settings" data-reminder-id="${reminderId}">⚙️ Settings</button>
+        <button class="reminder-btn dismiss" data-action="dismiss" data-reminder-id="${reminderId}">✓ Dismiss</button>
+      </div>
+      <div class="reminder-settings-panel hidden" data-reminder-id="${reminderId}">
+        <div class="reminder-settings-title">Reminder Settings</div>
+        <div class="reminder-settings-row">
+          <button class="reminder-btn mute" data-action="mute" data-reminder-id="${reminderId}">🔇 Mute</button>
+          <button class="reminder-btn stop-alarm" data-action="stop" data-reminder-id="${reminderId}">⏹️ Stop Alarm</button>
+        </div>
+        <div class="reminder-settings-row">
+          <input class="reminder-reschedule-input" data-reminder-id="${reminderId}" placeholder="New time, e.g. in 10 minutes" />
+          <button class="reminder-btn reschedule-now" data-action="reschedule-now" data-reminder-id="${reminderId}">Set</button>
+        </div>
+      </div>
+    `;
+  }
+
   /** Render extracted action details */
   _renderActionDetails(details) {
     const hiddenKeys = ['raw', 'options'];
@@ -353,6 +382,100 @@ export class ConversationManager {
     });
     if (regenBtn) {
       regenBtn.addEventListener('click', () => this._handleRegenerate(action.id, msgEl));
+    }
+  }
+
+  /** Bind reminder buttons */
+  _bindReminderButtons(msgEl, reminderId) {
+    const stopBtn = msgEl.querySelector(`.reminder-btn.stop-alarm[data-reminder-id="${reminderId}"]`);
+    const rescheduleBtn = msgEl.querySelector(`.reminder-btn.reschedule[data-reminder-id="${reminderId}"]`);
+    const muteBtn = msgEl.querySelector(`.reminder-btn.mute[data-reminder-id="${reminderId}"]`);
+    const settingsBtn = msgEl.querySelector(`.reminder-btn.settings[data-reminder-id="${reminderId}"]`);
+    const rescheduleNowBtn = msgEl.querySelector(`.reminder-btn.reschedule-now[data-reminder-id="${reminderId}"]`);
+    const dismissBtn = msgEl.querySelector(`.reminder-btn.dismiss[data-reminder-id="${reminderId}"]`);
+
+    if (stopBtn) {
+      stopBtn.addEventListener('click', () => this._handleReminderStop(reminderId, msgEl));
+    }
+    if (rescheduleBtn) {
+      rescheduleBtn.addEventListener('click', () => this._handleReminderReschedule(reminderId, msgEl));
+    }
+    if (muteBtn) {
+      muteBtn.addEventListener('click', () => this._handleReminderMute(reminderId, msgEl));
+    }
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', () => this._toggleReminderSettings(reminderId, msgEl));
+    }
+    if (rescheduleNowBtn) {
+      rescheduleNowBtn.addEventListener('click', () => this._handleReminderRescheduleNow(reminderId, msgEl));
+    }
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', () => this._handleReminderDismiss(reminderId, msgEl));
+    }
+  }
+
+  /** Handle reminder reschedule */
+  _handleReminderReschedule(reminderId, msgEl) {
+    const newTime = prompt('Enter new reminder time (e.g., "in 10 minutes", "tomorrow at 3pm"):');
+    if (newTime) {
+      this.send(`Reschedule reminder ${reminderId} to ${newTime}`);
+    }
+  }
+
+  /** Handle immediate stop alarm */
+  _handleReminderStop(reminderId, msgEl) {
+    if (typeof window.stopReminderAlarm === 'function') {
+      window.stopReminderAlarm();
+    }
+    const stopBtn = msgEl.querySelector(`.reminder-btn.stop-alarm[data-reminder-id="${reminderId}"]`);
+    if (stopBtn) {
+      stopBtn.textContent = '✔️ Alarm Stopped';
+      stopBtn.disabled = true;
+    }
+  }
+
+  /** Toggle reminder settings panel */
+  _toggleReminderSettings(reminderId, msgEl) {
+    const panel = msgEl.querySelector(`.reminder-settings-panel[data-reminder-id="${reminderId}"]`);
+    if (!panel) return;
+    panel.classList.toggle('hidden');
+  }
+
+  /** Handle reschedule from panel input */
+  _handleReminderRescheduleNow(reminderId, msgEl) {
+    const input = msgEl.querySelector(`.reminder-reschedule-input[data-reminder-id="${reminderId}"]`);
+    if (!input || !input.value.trim()) {
+      alert('Please enter a new reminder time.');
+      return;
+    }
+    this.send(`Reschedule reminder ${reminderId} to ${input.value.trim()}`);
+  }
+
+  /** Handle reminder mute */
+  _handleReminderMute(reminderId, msgEl) {
+    window.reminderMuted = !window.reminderMuted;
+    const muteBtns = msgEl.querySelectorAll(`.reminder-btn.mute[data-reminder-id="${reminderId}"]`);
+    muteBtns.forEach(btn => {
+      btn.textContent = window.reminderMuted ? '🔊 Unmute' : '🔇 Mute';
+    });
+    if (window.reminderMuted && typeof window.stopReminderAlarm === 'function') {
+      window.stopReminderAlarm();
+    }
+    alert(`Reminders ${window.reminderMuted ? 'muted' : 'unmuted'}.`);
+  }
+
+  /** Handle reminder dismiss */
+  _handleReminderDismiss(reminderId, msgEl) {
+    const btns = msgEl.querySelector('.reminder-btns');
+    if (btns) {
+      btns.innerHTML = '<span style="color: green;">✓ Dismissed</span>';
+    }
+    const panel = msgEl.querySelector(`.reminder-settings-panel[data-reminder-id="${reminderId}"]`);
+    if (panel) {
+      panel.classList.add('hidden');
+    }
+    if (typeof window.stopReminderAlarm === 'function') {
+      window.stopReminderAlarm();
     }
   }
 
@@ -516,6 +639,9 @@ export class ConversationManager {
         btnsArea.innerHTML = `<div class="action-result error">⚠️ ${this._escapeHtml(resultMessage)}</div>`;
       }
     }
+
+    // Action cards can grow after confirm/cancel; keep latest content visible above the fixed input bar.
+    this._scrollToBottom();
   }
 
   /** Render debug panel (hidden by default, toggled via header switch) */

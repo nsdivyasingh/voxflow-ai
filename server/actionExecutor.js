@@ -174,6 +174,11 @@ async function extractActionDetails(intent, message) {
         details.what = reminderMatch[1]?.trim();
         details.when = reminderMatch[2]?.trim();
       } else {
+        const titleMatch = message.match(/title\s+(?:is\s+|of\s+)?["']?([^"']+)["']?/i);
+        if (titleMatch) {
+          details.title = titleMatch[1]?.trim();
+        }
+
         // Try "remind me to X" (no time)
         const whatOnly = message.match(/remind(?:\s+me)?\s+(?:to\s+)?(.+)$/i);
         if (whatOnly) {
@@ -187,6 +192,9 @@ async function extractActionDetails(intent, message) {
           if (details.what) {
             details.what = details.what.replace(timeMatch[0], '').trim();
           }
+        }
+        if (!details.what && details.title) {
+          details.what = details.title;
         }
       }
       break;
@@ -572,7 +580,8 @@ export async function executeConfirmedAction(action, sessionId) {
 
   if (action.intent === 'reminder') {
     const result = createReminder({
-      what: action.details?.what || 'Reminder',
+      what: action.details?.what || action.details?.title || 'Reminder',
+      title: action.details?.title,
       when: action.details?.when || '',
       sessionId: sessionId || 'default',
     });

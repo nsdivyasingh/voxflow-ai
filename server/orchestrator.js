@@ -18,6 +18,7 @@ import { detectIntent, classifyQuery } from './intentDetector.js';
 import { getSession, recordTopic, storePendingAction, retrieveMemory, analyzeContext } from './sessionStore.js';
 import { retrieve } from './retriever.js';
 import { prepareAction } from './actionExecutor.js';
+import { updatePreferences } from './memoryLayer.js';
 import { generateResponse } from './responseGenerator.js';
 import {
   recordTurn,
@@ -122,7 +123,10 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
   // ── Step 1: Intent Detection ──
   const intent = detectIntent(message);
 
-  // ── Step 2: Query Classification ──
+  // ── Step 2: Update user preferences ──
+  updatePreferences(sessionId, message);
+
+  // ── Step 3: Query Classification ──
   const queryType = classifyQuery(intent, message);
 
   // ── Step 3: Get session & context ──
@@ -271,6 +275,7 @@ export async function orchestrate({ message, history = [], sessionId = 'default'
       action,
       history,
       conversationContext,
+      sessionId,
     });
     
     isStream = genResult.isStream;

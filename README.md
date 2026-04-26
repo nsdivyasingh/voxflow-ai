@@ -23,6 +23,8 @@ It combines:
   - long-term summarized memory in Qdrant,
   - extracted user entities/preferences in Qdrant.
 - Reminder scheduler with Server-Sent Events (SSE) for real-time browser notifications.
+- Persistent reminder storage and restore on backend restart (`server/reminders.json` runtime file).
+- Workspace-style UI with 3 columns: left control sidebar, center chat, right live reminders/calendar panel.
 - Optional debug trace to inspect orchestrator decisions in chat.
 
 ## Architecture overview
@@ -66,6 +68,7 @@ voxflow-ai/
     memoryLayer.js        Short/long/entity memory logic
     actionExecutor.js     Action preparation and confirmed execution
     reminderStore.js      Reminder scheduler + SSE event emitter
+    calendarSync.js       Google Calendar integration (optional)
   qdrant/                 Python FastAPI retrieval service
     main.py               /ask endpoint
     qdrant_service.py     Qdrant query helpers
@@ -122,6 +125,11 @@ EMAIL_APP_PASSWORD=
 
 # OpenRouter model for email analysis
 OPENROUTER_MODEL=google/gemma-3-27b-it:free
+
+# Google Calendar sync (optional)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REFRESH_TOKEN=
 ```
 
 ### Variable notes
@@ -134,6 +142,7 @@ OPENROUTER_MODEL=google/gemma-3-27b-it:free
 - `SMTP_*` enables real email sending on approved email actions.
 - `EMAIL_IMAP_*` + `EMAIL_ADDRESS` + `EMAIL_APP_PASSWORD` enable inbox fetch and analysis endpoints.
 - `OPENROUTER_MODEL` controls which OpenRouter model summarizes email threads.
+- `GOOGLE_CLIENT_*` + `GOOGLE_REFRESH_TOKEN` enable calendar add/list endpoints.
 
 ## Local development
 
@@ -205,7 +214,16 @@ Actions are prepared first and executed only after confirmation.
 
 - `GET /api/reminders/events` (SSE stream for fired reminders)
 - `GET /api/reminders?sessionId=...`
+- `POST /api/reminders/:id/cancel`
 - `DELETE /api/memory/:sessionId`
+
+### Calendar
+
+- `POST /api/calendar/add`
+  - Body: `{ summary, startTime, endTime, description? }`
+  - Adds an event to Google Calendar (when calendar credentials are configured).
+- `GET /api/calendar/upcoming`
+  - Returns `{ events: [...] }` for upcoming events.
 
 ### Health
 
@@ -225,6 +243,9 @@ Actions are prepared first and executed only after confirmation.
     - decisions
     - action items
     - blockers/risks
+- `POST /api/email/sync`
+  - Body: `{ days?, limit? }`
+  - Triggers inbox sync job and returns synced count.
 
 ### Python retrieval service
 
@@ -257,6 +278,13 @@ If Qdrant or Gemini keys are missing, memory features degrade gracefully.
 - Otherwise it falls back to browser Web Speech APIs.
 - Typed queries still receive TTS output (when available).
 - Reminder events can trigger browser notifications and spoken reminders.
+
+## UI behavior (current)
+
+- Left sidebar shows status and quick actions.
+- Center panel handles conversation and confirmation cards.
+- Right panel shows active reminders and upcoming calendar events.
+- Composer stays visible at bottom of chat column without covering messages/cards.
 
 ## Optional: seed Qdrant knowledge
 

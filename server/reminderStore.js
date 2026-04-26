@@ -5,6 +5,10 @@
  * Supports natural language date/time parsing.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 // ── Reminder Storage ─────────────────────────────────────────
 // Map<reminderId, ReminderObject>
 const reminders = new Map();
@@ -15,6 +19,53 @@ const timers = new Map();
 
 // Listeners for fired reminders (SSE clients)
 const listeners = new Set();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REMINDER_DB_PATH = path.join(__dirname, 'reminders.json');
+
+function persistReminders() {
+  try {
+    const payload = {
+      nextId,
+      reminders: [...reminders.values()],
+    };
+    fs.writeFileSync(REMINDER_DB_PATH, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[VoxFlow] Failed to persist reminders:', err.message || err);
+  }
+}
+
+function restoreReminders() {
+  try {
+    if (!fs.existsSync(REMINDER_DB_PATH)) return;
+    const raw = fs.readFileSync(REMINDER_DB_PATH, 'utf8');
+    if (!raw.trim()) return;
+
+    const parsed = JSON.parse(raw);
+    const persistedReminders = Array.isArray(parsed?.reminders) ? parsed.reminders : [];
+    nextId = Number.isInteger(parsed?.nextId) && parsed.nextId > 0 ? parsed.nextId : 1;
+
+    const now = Date.now();
+    for (const reminder of persistedReminders) {
+      if (!reminder?.id || !reminder?.when) continue;
+      const fireAt = new Date(reminder.when).getTime();
+      if (Number.isNaN(fireAt)) continue;
+      if (fireAt <= now) {
+        // Fire overdue reminders on startup
+        fireReminder(reminder);
+      } else {
+        reminder.status = 'scheduled';
+        reminders.set(reminder.id, reminder);
+        scheduleReminder(reminder);
+      }
+    }
+
+    console.log(`[VoxFlow] 🔔 Restored ${reminders.size} reminder(s) from disk`);
+  } catch (err) {
+    console.error('[VoxFlow] Failed to restore reminders:', err.message || err);
+  }
+}
 
 // ── Natural Language Date Parsing ────────────────────────────
 
@@ -131,8 +182,8 @@ export function parseDateTime(input) {
  * @param {string} params.sessionId - Session that created this
  * @returns {{ success: boolean, reminder?: object, error?: string }}
  */
-export function createReminder({ what, when, sessionId }) {
-  if (!what) {
+export function createReminder({ what, title, when, sessionId }) {
+  if (!what && !title) {
     return { success: false, error: 'Please tell me what to remind you about.' };
   }
   if (!when) {
@@ -154,7 +205,8 @@ export function createReminder({ what, when, sessionId }) {
   const id = `reminder-${nextId++}`;
   const reminder = {
     id,
-    what,
+    title: title || what,
+    what: what || title,
     when: fireAt.toISOString(),
     whenHuman: formatFriendlyTime(fireAt),
     rawWhen: when,
@@ -165,6 +217,7 @@ export function createReminder({ what, when, sessionId }) {
 
   reminders.set(id, reminder);
   scheduleReminder(reminder);
+  persistReminders();
 
   console.log(`[VoxFlow] 🔔 Reminder scheduled: "${what}" at ${reminder.whenHuman} (${id})`);
 
@@ -196,6 +249,7 @@ export function cancelReminder(reminderId) {
 
   reminder.status = 'cancelled';
   reminders.delete(reminderId);
+  persistReminders();
   console.log(`[VoxFlow] ❌ Reminder cancelled: ${reminderId}`);
   return reminder;
 }
@@ -236,6 +290,7 @@ function fireReminder(reminder) {
   reminder.status = 'fired';
   reminders.delete(reminder.id);
   timers.delete(reminder.id);
+  persistReminders();
 
   console.log(`[VoxFlow] 🔔🔔 REMINDER FIRED: "${reminder.what}"`);
 
@@ -243,6 +298,7 @@ function fireReminder(reminder) {
   const event = {
     type: 'reminder',
     id: reminder.id,
+    title: reminder.title,
     what: reminder.what,
     when: reminder.when,
     whenHuman: reminder.whenHuman,
@@ -300,3 +356,15 @@ function formatFriendlyTime(date) {
   });
   return `${dateStr} at ${timeStr}`;
 }
+
+restoreReminders();
+
+// Periodic check for due reminders (in case timers are missed due to restart or long delays)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, reminder] of reminders) {
+    if (reminder.status === 'scheduled' && new Date(reminder.when).getTime() <= now) {
+      fireReminder(reminder);
+    }
+  }
+}, 30000); // check every 30 seconds

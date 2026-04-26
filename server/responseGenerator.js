@@ -10,6 +10,8 @@
  *  - Always voice-first: 1–3 sentences, natural spoken language
  */
 
+import { getPreferencesContext } from './memoryLayer.js';
+
 // ══════════════════════════════════════════════════════════════
 // ── LLM Integration ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
@@ -117,7 +119,7 @@ function addToCache(key, value) {
  * @param {object} params
  * @returns {Promise<object>} { isStream: boolean, reply?: string, stream?: AsyncGenerator }
  */
-async function llmGenerate({ queryType, intent, message, contextText, memoryContext, history }) {
+async function llmGenerate({ queryType, intent, message, contextText, memoryContext, history, sessionId }) {
   if (!llmClient) return null;
 
   // Build memory preamble if available
@@ -125,14 +127,19 @@ async function llmGenerate({ queryType, intent, message, contextText, memoryCont
     ? `\n\n[Relevant memories from past conversations]:\n${memoryContext}\n`
     : '';
 
+  // Build preferences preamble
+  const preferencesPreamble = getPreferencesContext(sessionId)
+    ? `\n\n[User preferences]:\n${getPreferencesContext(sessionId)}\n`
+    : '';
+
   let prompt = '';
 
   if (queryType === 'KNOWLEDGE' && contextText) {
-    prompt = `${memoryPreamble}Context:\n${contextText}\n\nUser question: "${message}"\n\nAnswer the user's question based on the context above. If memory context is provided, use it to personalize your answer. Be concise and voice-friendly.`;
+    prompt = `${memoryPreamble}${preferencesPreamble}Context:\n${contextText}\n\nUser question: "${message}"\n\nAnswer the user's question based on the context above. If memory context is provided, use it to personalize your answer. Be concise and voice-friendly.`;
   } else if (queryType === 'ACTION') {
-    prompt = `${memoryPreamble}The user wants to perform an action (${intent}). Their message: "${message}"\n\nAcknowledge the request naturally, and ask for any missing details needed to complete the action. Be concise.`;
+    prompt = `${memoryPreamble}${preferencesPreamble}The user wants to perform an action (${intent}). Their message: "${message}"\n\nAcknowledge the request naturally, and ask for any missing details needed to complete the action. Be concise.`;
   } else {
-    prompt = `${memoryPreamble}User message: "${message}"\n\nRespond naturally and concisely as a friendly voice assistant. If memory context is provided, use it to personalize your response.`;
+    prompt = `${memoryPreamble}${preferencesPreamble}User message: "${message}"\n\nRespond naturally and concisely as a friendly voice assistant. If memory context is provided, use it to personalize your response.`;
   }
 
   const cacheKey = `${queryType}-${intent}-${message}`;
@@ -347,11 +354,11 @@ function templateGenerate({ queryType, intent, message, contextText, action, con
  * @returns {Promise<object>} { isStream: boolean, reply?: string, stream?: AsyncGenerator }
  */
 export async function generateResponse(params) {
-  const { queryType, intent, message, contextText, memoryContext, action, history, conversationContext } = params;
+  const { queryType, intent, message, contextText, memoryContext, action, history, conversationContext, sessionId } = params;
 
   // Try LLM first
   if (isLLMAvailable() && !STATIC_RESPONSES[intent]) {
-    const llmReply = await llmGenerate({ queryType, intent, message, contextText, memoryContext, history });
+    const llmReply = await llmGenerate({ queryType, intent, message, contextText, memoryContext, history, sessionId });
     if (llmReply) return llmReply;
   }
 
